@@ -1,14 +1,31 @@
-venv
-__pycache__
-*.pyc
-*.pyo
+# Virtual environment
+venv/
+
+# Environment variables
 .env
-.env.local
-instance/
-*.db
-*.sqlite3
-.pytest_cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django
+*.log
+media/
+staticfiles/
+
+# Database
+db.sqlite3
+
+# IDE
+.vscode/
+.idea/
+
+# OS
 .DS_Store
-.vscode/*
-!.vscode/extensions.json
-.idea
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
