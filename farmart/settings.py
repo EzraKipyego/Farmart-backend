@@ -39,7 +39,7 @@ INSTALLED_APPS = [
     "corsheaders",
 
     # Farmart apps
-    "auth_app",
+    "accounts",
     "animals",
     "orders",
     "payments",
