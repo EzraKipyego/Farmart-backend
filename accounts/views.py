@@ -1,3 +1,74 @@
-from django.shortcuts import render
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions
+from rest_framework_simplejwt.tokens import RefreshToken
+from .models import User
+from .serializers import UserSerializer, RegisterSerializer
 
-# Create your views here.
+
+def make_token(user):
+    refresh = RefreshToken.for_user(user)
+    refresh["role"] = user.role
+    return str(refresh.access_token)
+
+
+class RegisterView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+
+        if User.objects.filter(email=email).exists():
+            return Response({"message": "An account with this email already exists"}, status=409)
+
+        serializer = RegisterSerializer(data={**request.data, "email": email})
+        if not serializer.is_valid():
+            first_error = next(iter(serializer.errors.values()))[0]
+            return Response({"message": str(first_error)}, status=400)
+
+        user = serializer.save()
+        token = make_token(user)
+        return Response({"token": token, "user": UserSerializer(user).data}, status=201)
+
+
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        password = request.data.get("password") or ""
+
+        if not email or not password:
+            return Response({"message": "Email and password are required"}, status=400)
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"message": "Incorrect email or password"}, status=401)
+
+        if not user.check_password(password):
+            return Response({"message": "Incorrect email or password"}, status=401)
+
+        token = make_token(user)
+        return Response({"token": token, "user": UserSerializer(user).data}, status=200)
+
+
+class ProfileView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(UserSerializer(request.user).data)
+
+    def put(self, request):
+        user = request.user
+        data = request.data
+        if "name" in data:
+            user.name = data["name"]
+        if "phone" in data:
+            user.phone = data["phone"]
+        if "county" in data:
+            user.county = data["county"]
+        if "farmName" in data:
+            user.farm_name = data["farmName"]
+        user.save()
+        return Response(UserSerializer(user).data)
