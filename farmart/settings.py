@@ -83,19 +83,19 @@ SIMPLE_JWT = {
 }
 
 CORS_ALLOWED_ORIGINS = [
-    os.environ.get("FRONTEND_URL", "http://localhost:5173"),
+    os.environ.get("FRONTEND_ORIGIN", os.environ.get("FRONTEND_URL", "http://localhost:5173")),
 ]
 CORS_ALLOW_CREDENTIALS = True
 
 # Daraja (M-Pesa) sandbox credentials. Leave blank during development —
 # the payments app falls back to a simulated STK push until these are
 # set, so the full flow still works end to end without them.
-DARAJA_CONSUMER_KEY = os.environ.get("DARAJA_CONSUMER_KEY", "")
-DARAJA_CONSUMER_SECRET = os.environ.get("DARAJA_CONSUMER_SECRET", "")
-DARAJA_SHORTCODE = os.environ.get("DARAJA_SHORTCODE", "")
-DARAJA_PASSKEY = os.environ.get("DARAJA_PASSKEY", "")
-DARAJA_CALLBACK_URL = os.environ.get("DARAJA_CALLBACK_URL", "")
-DARAJA_ENV = os.environ.get("DARAJA_ENV", "sandbox")
+DARAJA_CONSUMER_KEY = os.environ.get("MPESA_CONSUMER_KEY", os.environ.get("DARAJA_CONSUMER_KEY", ""))
+DARAJA_CONSUMER_SECRET = os.environ.get("MPESA_CONSUMER_SECRET", os.environ.get("DARAJA_CONSUMER_SECRET", ""))
+DARAJA_SHORTCODE = os.environ.get("MPESA_SHORTCODE", os.environ.get("DARAJA_SHORTCODE", ""))
+DARAJA_PASSKEY = os.environ.get("MPESA_PASSKEY", os.environ.get("DARAJA_PASSKEY", ""))
+DARAJA_CALLBACK_URL = os.environ.get("MPESA_CALLBACK_URL", os.environ.get("DARAJA_CALLBACK_URL", ""))
+DARAJA_ENV = os.environ.get("MPESA_ENV", os.environ.get("DARAJA_ENV", "sandbox"))
 
 AUTH_PASSWORD_VALIDATORS = []
 
