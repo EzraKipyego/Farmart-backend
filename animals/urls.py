@@ -1,8 +1,8 @@
 from django.urls import path
-from .views import RegisterView, LoginView, ProfileView
+from .views import AnimalListCreateView, AnimalDetailView, FarmerAnimalsView
 
 urlpatterns = [
-    path("auth/register", RegisterView.as_view()),
-    path("auth/login", LoginView.as_view()),
-    path("profile", ProfileView.as_view()),
+    path("animals", AnimalListCreateView.as_view()),
+    path("animals/<uuid:animal_id>", AnimalDetailView.as_view()),
+    path("farmer/animals", FarmerAnimalsView.as_view()),
 ]
