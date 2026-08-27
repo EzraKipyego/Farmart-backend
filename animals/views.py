@@ -80,6 +80,5 @@ class FarmerAnimalsView(APIView):
 	permission_classes = [permissions.IsAuthenticated]
 
 	def get(self, request):
-		farmer_id = request.query_params.get("farmer_id") or request.user.id
-		queryset = Animal.objects.filter(farmer_id=farmer_id)
+		queryset = Animal.objects.filter(farmer_id=request.user.id)
 		return Response(AnimalSerializer(queryset, many=True).data)

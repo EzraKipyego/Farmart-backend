@@ -13,7 +13,7 @@ class Payment(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    order = models.OneToOneField(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="payment")
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="payments")
     checkout_request_id = models.CharField(max_length=80, unique=True)
     merchant_request_id = models.CharField(max_length=80, null=True, blank=True, unique=True)
     phone = models.CharField(max_length=20)

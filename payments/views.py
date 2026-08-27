@@ -40,8 +40,17 @@ class StkPushView(APIView):
         order_amount = sum((Decimal(str(item.price)) * item.quantity for item in order.items.all()), Decimal("0"))
         if requested_amount != order_amount:
             return error_response("Payment amount does not match the order total", "AMOUNT_MISMATCH", 400)
-        if order.payment_status != "pending":
+        if order.payment_status in ("success",):
             return error_response("Order is not payable", "ORDER_NOT_PAYABLE", 409)
+
+        active_payment = order.payments.filter(status="pending").order_by("-created_at").first()
+        if active_payment:
+            return Response({
+                "checkoutRequestId": active_payment.checkout_request_id,
+                "merchantRequestId": active_payment.merchant_request_id,
+                "status": "pending",
+                "message": "STK push already in progress",
+            }, status=200)
 
         try:
             checkout_request_id, merchant_request_id = initiate_stk_push(phone, requested_amount, str(order.id))
@@ -118,6 +127,8 @@ class DarajaCallbackView(APIView):
             payment.order.save(update_fields=["payment_status", "order_status"])
         else:
             payment.status = "cancelled" if result_code == 1032 else "failed"
+            payment.order.payment_status = payment.status
+            payment.order.save(update_fields=["payment_status"])
         payment.save()
         logger.info("[payments] Callback processed for %s: %s", checkout_request_id, payment.status)
         return Response({"message": "Callback received"}, status=200)

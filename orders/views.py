@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from .models import Order, OrderItem
 from animals.models import Animal
 from farmart.permissions import IsBuyer, IsFarmer
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import logging
 from django.db import transaction
 
@@ -59,8 +59,13 @@ class CheckoutView(APIView):
                 return Response({"message": f"Animal {animal_id} is no longer available"}, status=409)
 
             price = Decimal(str(animal.price))
-            if item.get("price") is not None and Decimal(str(item["price"])) != price:
-                return Response({"message": f"The price for {animal.title} has changed"}, status=409)
+            if item.get("price") is not None:
+                try:
+                    client_price = Decimal(str(item["price"]))
+                except (InvalidOperation, TypeError):
+                    return Response({"message": "Item price must be numeric"}, status=400)
+                if client_price != price:
+                    return Response({"message": f"The price for {animal.title} has changed"}, status=409)
             item_total = price * quantity
             total += item_total
             
@@ -134,7 +139,12 @@ class OrderStatusView(APIView):
         except Order.DoesNotExist:
             return Response({"message": "Order not found"}, status=404)
 
-        new_status = request.data.get("status")
+        requested_status = request.data.get("status")
+        new_status = requested_status
+        if new_status == "confirmed":
+            new_status = "accepted"
+        elif new_status == "rejected":
+            new_status = "cancelled"
         if order.payment_status != "success":
             return Response({"message": "Unpaid orders cannot be processed", "code": "PAYMENT_REQUIRED", "details": {}}, status=409)
 
@@ -148,4 +158,5 @@ class OrderStatusView(APIView):
         farmer_items.update(status="confirmed" if new_status in ("processing", "accepted", "dispatched", "delivered") else "rejected")
         order.order_status = new_status
         order.save(update_fields=["order_status"])
-        return Response({"id": str(order.id), "status": order.order_status, "payment_status": order.payment_status})
+        response_status = requested_status if requested_status in ("confirmed", "rejected") else order.order_status
+        return Response({"id": str(order.id), "status": response_status, "payment_status": order.payment_status})

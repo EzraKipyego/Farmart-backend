@@ -18,6 +18,7 @@ class Order(models.Model):
         ("success", "Success"),
         ("failed", "Failed"),
         ("cancelled", "Cancelled"),
+        ("timeout", "Timeout"),
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -58,6 +59,7 @@ class Order(models.Model):
             "payment_status": self.payment_status,
             "items": [i.to_dict() for i in items],
             "total": sum(i.price * i.quantity for i in items),
+            "amount": sum(i.price * i.quantity for i in items),
             "currency": "KES",
             "delivery_details": {
                 "name": self.delivery_name,
@@ -77,6 +79,7 @@ class Order(models.Model):
             "payment_status": self.payment_status,
             "items": [i.to_dict() for i in farmer_items],
             "total": sum(i.price * i.quantity for i in farmer_items),
+            "amount": sum(i.price * i.quantity for i in farmer_items),
             "currency": "KES",
             "buyerName": self.buyer.name,
             "createdAt": self.created_at.strftime("%Y-%m-%d") if self.created_at else None,
