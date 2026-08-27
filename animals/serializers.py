@@ -14,7 +14,7 @@ class AnimalSerializer(serializers.ModelSerializer):
         model = Animal
         fields = [
             "id", "type", "breed", "title", "age", "ageUnit", "weight", "price", "location",
-            "description", "image", "farmerId", "farmerName", "verified", "vaccinated",
+            "description", "image", "available", "farmerId", "farmerName", "verified", "vaccinated",
             "healthCertified", "farmerRating", "createdAt",
         ]
         read_only_fields = ["id", "verified", "vaccinated", "farmerRating"]

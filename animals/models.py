@@ -18,6 +18,7 @@ class Animal(models.Model):
 
     farmer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="animals")
 
+    available = models.BooleanField(default=True)
     verified = models.BooleanField(default=False)
     vaccinated = models.BooleanField(default=False)
     health_certified = models.BooleanField(default=False)
