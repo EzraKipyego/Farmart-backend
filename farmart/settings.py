@@ -61,9 +61,12 @@ WSGI_APPLICATION = "farmart.wsgi.application"
 
 DATABASES = {
     "default": dj_database_url.config(
-        default=os.environ.get(
-            "DATABASE_URL", "postgresql://farmart_user:farmart_pass@localhost:5432/farmart_db"
-        )
+        default=(
+            f"postgresql://{os.environ.get('DB_USER', 'farmart_user')}:{os.environ.get('DB_PASSWORD', 'farmart_pass')}"
+            f"@{os.environ.get('DB_HOST', 'localhost')}:{os.environ.get('DB_PORT', '5432')}"
+            f"/{os.environ.get('DB_NAME', 'farmart_db')}"
+        ),
+        conn_max_age=600,
     )
 }
 
