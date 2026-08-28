@@ -115,7 +115,10 @@ DARAJA_CONSUMER_SECRET = env_value("MPESA_CONSUMER_SECRET", env_value("DARAJA_CO
 DARAJA_SHORTCODE = env_value("MPESA_SHORTCODE", env_value("DARAJA_SHORTCODE"))
 DARAJA_PASSKEY = env_value("MPESA_PASSKEY", env_value("DARAJA_PASSKEY"))
 DARAJA_CALLBACK_URL = env_value("MPESA_CALLBACK_URL", env_value("DARAJA_CALLBACK_URL")).rstrip("/")
-DARAJA_ENV = env_value("MPESA_ENV", env_value("DARAJA_ENV", "sandbox")).lower()
+DARAJA_ENV = env_value(
+    "MPESA_ENVIRONMENT",
+    env_value("MPESA_ENV", env_value("DARAJA_ENV", "sandbox")),
+).lower()
 
 AUTH_PASSWORD_VALIDATORS = []
 

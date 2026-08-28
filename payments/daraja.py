@@ -5,10 +5,11 @@ Requires MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE,
 MPESA_PASSKEY, and MPESA_CALLBACK_URL to be set in .env.
 """
 import base64
-import requests
 import logging
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+
+import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,8 @@ class DarajaResponseError(Exception):
 
 
 def _base_url():
-    env = getattr(settings, "DARAJA_ENV", "sandbox")
+    env = getattr(settings, "DARAJA_ENV", getattr(settings, "MPESA_ENVIRONMENT", "sandbox"))
+    env = str(env).strip().lower()
     return PRODUCTION_BASE_URL if env == "production" else SANDBOX_BASE_URL
 
 
@@ -48,8 +50,17 @@ def get_access_token():
         )
         response.raise_for_status()
         return response.json()["access_token"]
-    except Exception as e:
-        logger.error(f"[Daraja] Failed to obtain access token: {e}")
+    except requests.exceptions.RequestException as error:
+        response = getattr(error, "response", None)
+        logger.error(
+            "[Daraja] OAuth request failed: %s response_status=%s response_body=%s",
+            error,
+            response.status_code if response is not None else None,
+            response.text if response is not None else None,
+        )
+        raise
+    except Exception as error:
+        logger.error("[Daraja] Failed to obtain access token: %s", error)
         raise
 
 
@@ -136,9 +147,15 @@ def initiate_stk_push(phone, amount, account_reference):
         
         logger.info(f"[Daraja] STK push initiated: {checkout_id} for {phone}")
         return checkout_id, merchant_id
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"[Daraja] HTTP error {e.response.status_code}: {e.response.text}")
+    except requests.exceptions.RequestException as error:
+        response = getattr(error, "response", None)
+        logger.error(
+            "[Daraja] Safaricom request failed: %s response_status=%s response_body=%s",
+            error,
+            response.status_code if response is not None else None,
+            response.text if response is not None else None,
+        )
         raise
-    except Exception as e:
-        logger.error(f"[Daraja] Error initiating STK push: {e}")
+    except Exception as error:
+        logger.error("[Daraja] Error initiating STK push: %s", error)
         raise
