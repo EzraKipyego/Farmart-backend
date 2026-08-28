@@ -16,6 +16,12 @@ SANDBOX_BASE_URL = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE_URL = "https://api.safaricom.co.ke"
 
 
+class DarajaResponseError(Exception):
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+
 def _base_url():
     env = getattr(settings, "DARAJA_ENV", "sandbox")
     return PRODUCTION_BASE_URL if env == "production" else SANDBOX_BASE_URL
@@ -93,7 +99,22 @@ def initiate_stk_push(phone, amount, account_reference):
         )
         response.raise_for_status()
         data = response.json()
-        
+
+        logger.info(
+            "[Daraja] STK response code=%s merchant_request_id=%s checkout_request_id=%s customer_message=%s",
+            data.get("ResponseCode"), data.get("MerchantRequestID"),
+            data.get("CheckoutRequestID"), data.get("CustomerMessage"),
+        )
+        if str(data.get("ResponseCode")) != "0":
+            raise DarajaResponseError(
+                data.get("ResponseDescription") or data.get("CustomerMessage") or "Daraja rejected the STK request",
+                {
+                    "response_code": data.get("ResponseCode"),
+                    "response_description": data.get("ResponseDescription"),
+                    "customer_message": data.get("CustomerMessage"),
+                },
+            )
+
         checkout_id = data.get("CheckoutRequestID")
         merchant_id = data.get("MerchantRequestID")
         

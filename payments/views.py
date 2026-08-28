@@ -1,5 +1,6 @@
 import logging
 from decimal import Decimal, InvalidOperation
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -10,7 +11,7 @@ from rest_framework.views import APIView
 from farmart.permissions import IsBuyer
 from orders.models import Order
 
-from .daraja import initiate_stk_push
+from .daraja import DarajaResponseError, initiate_stk_push
 from .models import Payment
 from .phone_utils import normalize_phone_number
 
@@ -43,7 +44,9 @@ class StkPushView(APIView):
         if order.payment_status in ("success",):
             return error_response("Order is not payable", "ORDER_NOT_PAYABLE", 409)
 
-        active_payment = order.payments.filter(status="pending").order_by("-created_at").first()
+        active_payment = order.payments.filter(
+            status="pending", created_at__gte=timezone.now() - timedelta(minutes=5)
+        ).order_by("-created_at").first()
         if active_payment:
             return Response({
                 "checkoutRequestId": active_payment.checkout_request_id,
@@ -54,6 +57,9 @@ class StkPushView(APIView):
 
         try:
             checkout_request_id, merchant_request_id = initiate_stk_push(phone, requested_amount, str(order.id))
+        except DarajaResponseError as error:
+            logger.error("[payments] Daraja rejected STK push: %s details=%s", error, error.details)
+            return error_response("Unable to send STK push", "DARaja_STK_REJECTED", 502, error.details)
         except Exception as error:
             logger.error("[payments] STK push failed: %s", error)
             return error_response("Could not reach the payment provider, try again", "PAYMENT_PROVIDER_UNAVAILABLE", 502)
