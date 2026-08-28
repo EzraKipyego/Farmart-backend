@@ -65,6 +65,8 @@ def initiate_stk_push(phone, amount, account_reference):
     """
     if not _credentials_configured():
         raise ValueError("Daraja credentials are not properly configured")
+    if not settings.DARAJA_CALLBACK_URL.startswith("https://"):
+        raise ValueError("MPESA_CALLBACK_URL must be a public HTTPS URL")
 
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     password = base64.b64encode(
@@ -103,7 +105,12 @@ def initiate_stk_push(phone, amount, account_reference):
             timeout=15,
         )
         response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"raw_response": response.text[:1000]}
+
+        logger.info("[Daraja] raw STK response status=%s body=%s", response.status_code, data)
 
         logger.info(
             "[Daraja] STK response code=%s merchant_request_id=%s checkout_request_id=%s customer_message=%s",

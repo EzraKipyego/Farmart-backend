@@ -6,4 +6,5 @@ urlpatterns = [
     path("payments/stk-push", StkPushView.as_view()),
     path("payments/<str:checkout_request_id>/status", PaymentStatusView.as_view()),
     path("payments/callback", DarajaCallbackView.as_view()),
+    path("payments/callback/", DarajaCallbackView.as_view()),
 ]
