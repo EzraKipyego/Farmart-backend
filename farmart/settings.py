@@ -114,7 +114,11 @@ DARAJA_CONSUMER_KEY = env_value("MPESA_CONSUMER_KEY", env_value("DARAJA_CONSUMER
 DARAJA_CONSUMER_SECRET = env_value("MPESA_CONSUMER_SECRET", env_value("DARAJA_CONSUMER_SECRET"))
 DARAJA_SHORTCODE = env_value("MPESA_SHORTCODE", env_value("DARAJA_SHORTCODE"))
 DARAJA_PASSKEY = env_value("MPESA_PASSKEY", env_value("DARAJA_PASSKEY"))
-DARAJA_CALLBACK_URL = env_value("MPESA_CALLBACK_URL", env_value("DARAJA_CALLBACK_URL")).rstrip("/")
+DEFAULT_MPESA_CALLBACK_URL = "https://farmart-backend-02tq.onrender.com/api/payments/callback/"
+DARAJA_CALLBACK_URL = (
+    env_value("MPESA_CALLBACK_URL", env_value("DARAJA_CALLBACK_URL"))
+    or DEFAULT_MPESA_CALLBACK_URL
+).strip()
 DARAJA_ENV = env_value(
     "MPESA_ENVIRONMENT",
     env_value("MPESA_ENV", env_value("DARAJA_ENV", "sandbox")),

@@ -76,7 +76,14 @@ def initiate_stk_push(phone, amount, account_reference):
     """
     if not _credentials_configured():
         raise ValueError("Daraja credentials are not properly configured")
-    if not settings.DARAJA_CALLBACK_URL.startswith("https://"):
+    callback_url = str(
+        getattr(
+            settings,
+            "DARAJA_CALLBACK_URL",
+            "https://farmart-backend-02tq.onrender.com/api/payments/callback/",
+        )
+    ).strip()
+    if not callback_url.startswith("https://"):
         raise ValueError("MPESA_CALLBACK_URL must be a public HTTPS URL")
 
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
@@ -103,7 +110,7 @@ def initiate_stk_push(phone, amount, account_reference):
         "PartyA": phone,
         "PartyB": settings.DARAJA_SHORTCODE,
         "PhoneNumber": phone,
-        "CallBackURL": settings.DARAJA_CALLBACK_URL,
+        "CallBackURL": callback_url,
         "AccountReference": account_reference,
         "TransactionDesc": "Farmart order payment",
     }
