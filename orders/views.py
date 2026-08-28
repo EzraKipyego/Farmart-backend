@@ -3,11 +3,13 @@ from rest_framework.response import Response
 from .models import Order, OrderItem
 from animals.models import Animal
 from farmart.permissions import IsBuyer, IsFarmer
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import logging
 from django.db import transaction
 
 logger = logging.getLogger(__name__)
+MONEY_QUANTUM = Decimal("0.01")
+DELIVERY_RATE = Decimal("0.03")
 
 
 class CheckoutView(APIView):
@@ -24,15 +26,18 @@ class CheckoutView(APIView):
         if idempotency_key:
             existing = Order.objects.filter(buyer=request.user, idempotency_key=idempotency_key).first()
             if existing:
+                existing_total = existing.total.quantize(MONEY_QUANTUM)
                 return Response({
                     "id": str(existing.id), "orderId": str(existing.id),
                     "status": existing.order_status,
-                    "amount": float(sum(i.price * i.quantity for i in existing.items.all())),
-                    "currency": "KES",
+                    "subtotal": str(existing.subtotal),
+                    "delivery_fee": str(existing.delivery_fee),
+                    "amount": str(existing_total), "total": str(existing_total),
+                    "currency": existing.currency,
                 }, status=201)
 
         # Validate all animals exist and get current prices
-        total = Decimal("0")
+        subtotal = Decimal("0")
         order_items_data = []
         
         for item in items:
@@ -66,8 +71,7 @@ class CheckoutView(APIView):
                     return Response({"message": "Item price must be numeric"}, status=400)
                 if client_price != price:
                     return Response({"message": f"The price for {animal.title} has changed"}, status=409)
-            item_total = price * quantity
-            total += item_total
+            subtotal += price * quantity
             
             order_items_data.append({
                 "animal": animal,
@@ -84,6 +88,10 @@ class CheckoutView(APIView):
                     delivery_phone=delivery.get("phone", ""),
                     delivery_county=delivery.get("county", ""),
                     delivery_address=delivery.get("address", ""),
+                    subtotal=subtotal.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                    delivery_fee=(subtotal * DELIVERY_RATE).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                    total=(subtotal * (Decimal("1.00") + DELIVERY_RATE)).quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP),
+                    currency="KES",
                     order_status="pending_payment",
                     payment_status="pending",
                     idempotency_key=idempotency_key,
@@ -94,7 +102,7 @@ class CheckoutView(APIView):
                     OrderItem.objects.create(
                         order=order, animal=animal, farmer_id=animal.farmer_id,
                         farmer_name=animal.farmer.name, title=animal.title,
-                        price=float(item_data["price"]), quantity=item_data["quantity"], status="pending",
+                        price=item_data["price"], quantity=item_data["quantity"], status="pending",
                     )
         except Exception as error:
             if idempotency_key and "unique constraint" in str(error).lower():
@@ -107,8 +115,11 @@ class CheckoutView(APIView):
                 "id": str(order.id),
                 "orderId": str(order.id),
                 "status": "pending_payment",
-                "amount": float(total),
-                "currency": "KES",
+                "subtotal": str(order.subtotal),
+                "delivery_fee": str(order.delivery_fee),
+                "amount": str(order.total),
+                "total": str(order.total),
+                "currency": order.currency,
             },
             status=201,
         )

@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 from django.db import models
 from accounts.models import User
 from animals.models import Animal
@@ -29,6 +30,10 @@ class Order(models.Model):
     delivery_county = models.CharField(max_length=80, blank=True, default="")
     delivery_address = models.CharField(max_length=255, blank=True, default="")
 
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    delivery_fee = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    total = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    currency = models.CharField(max_length=3, default="KES")
     order_status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default="pending_payment")
     payment_status = models.CharField(max_length=20, choices=PAYMENT_STATUS_CHOICES, default="pending")
     idempotency_key = models.CharField(max_length=255, unique=True, null=True, blank=True)
@@ -58,9 +63,11 @@ class Order(models.Model):
             "status": self.order_status,
             "payment_status": self.payment_status,
             "items": [i.to_dict() for i in items],
-            "total": sum(i.price * i.quantity for i in items),
-            "amount": sum(i.price * i.quantity for i in items),
-            "currency": "KES",
+            "subtotal": str(self.subtotal),
+            "delivery_fee": str(self.delivery_fee),
+            "total": str(self.total),
+            "amount": str(self.total),
+            "currency": self.currency,
             "delivery_details": {
                 "name": self.delivery_name,
                 "phone": self.delivery_phone,
@@ -78,9 +85,11 @@ class Order(models.Model):
             "status": self.order_status,
             "payment_status": self.payment_status,
             "items": [i.to_dict() for i in farmer_items],
-            "total": sum(i.price * i.quantity for i in farmer_items),
-            "amount": sum(i.price * i.quantity for i in farmer_items),
-            "currency": "KES",
+            "subtotal": str(self.subtotal),
+            "delivery_fee": str(self.delivery_fee),
+            "total": str(self.total),
+            "amount": str(self.total),
+            "currency": self.currency,
             "buyerName": self.buyer.name,
             "createdAt": self.created_at.strftime("%Y-%m-%d") if self.created_at else None,
         }
@@ -95,7 +104,7 @@ class OrderItem(models.Model):
     farmer_name = models.CharField(max_length=120)
 
     title = models.CharField(max_length=160)
-    price = models.FloatField()
+    price = models.DecimalField(max_digits=12, decimal_places=2)
     quantity = models.IntegerField(default=1)
 
     status = models.CharField(max_length=20, default="pending")  # pending | confirmed | rejected

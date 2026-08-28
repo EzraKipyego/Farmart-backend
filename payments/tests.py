@@ -32,7 +32,9 @@ class PaymentFlowTests(APITestCase):
         }, format="json", HTTP_IDEMPOTENCY_KEY="checkout-1")
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["status"], "pending_payment")
-        self.assertEqual(response.data["amount"], 10000.0)
+        self.assertEqual(response.data["subtotal"], "10000.00")
+        self.assertEqual(response.data["delivery_fee"], "300.00")
+        self.assertEqual(response.data["amount"], "10300.00")
 
     @patch("payments.views.initiate_stk_push", return_value=("ws_CO_test", "merchant_test"))
     def test_stk_is_pending_until_callback(self, _push):

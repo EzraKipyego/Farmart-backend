@@ -38,7 +38,7 @@ class StkPushView(APIView):
         except Order.DoesNotExist:
             return error_response("Order not found", "ORDER_NOT_FOUND", 404)
 
-        order_amount = sum((Decimal(str(item.price)) * item.quantity for item in order.items.all()), Decimal("0"))
+        order_amount = order.total.quantize(Decimal("0.01"))
         if requested_amount != order_amount:
             return error_response("Payment amount does not match the order total", "AMOUNT_MISMATCH", 400)
         if order.payment_status in ("success",):
@@ -56,7 +56,7 @@ class StkPushView(APIView):
             }, status=200)
 
         try:
-            checkout_request_id, merchant_request_id = initiate_stk_push(phone, requested_amount, str(order.id))
+            checkout_request_id, merchant_request_id = initiate_stk_push(phone, order_amount, str(order.id))
         except DarajaResponseError as error:
             logger.error("[payments] Daraja rejected STK push: %s details=%s", error, error.details)
             return error_response("Unable to send STK push", "DARaja_STK_REJECTED", 502, error.details)
@@ -69,7 +69,7 @@ class StkPushView(APIView):
             checkout_request_id=checkout_request_id,
             merchant_request_id=merchant_request_id,
             phone=phone,
-            amount=requested_amount,
+            amount=order_amount,
             status="pending",
         )
         return Response({
@@ -90,6 +90,13 @@ class PaymentStatusView(APIView):
             return error_response("Payment not found", "PAYMENT_NOT_FOUND", 404)
 
         result = {"checkoutRequestId": payment.checkout_request_id, "status": payment.status}
+        result.update({
+            "subtotal": str(payment.order.subtotal),
+            "delivery_fee": str(payment.order.delivery_fee),
+            "amount": str(payment.order.total),
+            "total": str(payment.order.total),
+            "currency": payment.order.currency,
+        })
         if payment.status == "success":
             result.update({"orderId": str(payment.order_id), "receipt": payment.mpesa_receipt_number})
         elif payment.status in ("failed", "cancelled", "timeout"):
