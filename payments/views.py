@@ -1,6 +1,6 @@
 import logging
-from decimal import Decimal, InvalidOperation
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -29,22 +29,18 @@ class StkPushView(APIView):
         order_id = request.data.get("order_id")
         try:
             phone = normalize_phone_number(request.data.get("phone") or request.data.get("phone_number", ""))
-            requested_amount = Decimal(str(request.data.get("amount")))
             order = Order.objects.prefetch_related("items").get(id=order_id, buyer=request.user)
         except ValueError:
             logger.warning("[payments] STK validation failed: invalid phone/order_id; fields=%s", list(request.data.keys()))
             return error_response("Invalid phone number or order ID", "INVALID_REQUEST", 400)
-        except (InvalidOperation, TypeError):
-            logger.warning("[payments] STK validation failed: invalid amount; fields=%s", list(request.data.keys()))
-            return error_response("Invalid payment amount", "INVALID_AMOUNT", 400)
         except Order.DoesNotExist:
             logger.warning("[payments] STK validation failed: order not found; order_id=%s", order_id)
             return error_response("Order not found", "ORDER_NOT_FOUND", 404)
 
-        order_amount = order.total.quantize(Decimal("0.01"))
-        if requested_amount != order_amount:
-            logger.warning("[payments] STK validation failed: amount mismatch; order_id=%s", order_id)
-            return error_response("Payment amount does not match the order total", "AMOUNT_MISMATCH", 400)
+        order_amount = int(round(float(order.total)))
+        if order_amount <= 0:
+            logger.warning("[payments] STK validation failed: non-positive order total; order_id=%s", order_id)
+            return error_response("Invalid payment amount", "INVALID_AMOUNT", 400)
         if order.payment_status in ("success",):
             return error_response("Order is not payable", "ORDER_NOT_PAYABLE", 409)
 
