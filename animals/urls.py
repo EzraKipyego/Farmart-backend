@@ -1,5 +1,6 @@
 from django.urls import path
-from .views import AnimalListCreateView, AnimalDetailView, FarmerAnimalsView
+
+from .views import AnimalDetailView, AnimalListCreateView, FarmerAnimalsView
 
 urlpatterns = [
     path("animals", AnimalListCreateView.as_view()),
