@@ -4,6 +4,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 from corsheaders.defaults import default_headers
+from django.core.exceptions import ImproperlyConfigured
 
 load_dotenv()
 
@@ -59,12 +60,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "farmart.wsgi.application"
 
+database_url = os.getenv("DATABASE_URL")
+if not database_url and os.getenv("DEBUG", "True").lower() not in ("true", "1", "yes"):
+    raise ImproperlyConfigured("DATABASE_URL must be set when DEBUG=False")
+
 DATABASES = {
     "default": dj_database_url.config(
-        default=(
-            f"postgresql://{os.environ.get('DB_USER', 'farmart_user')}:{os.environ.get('DB_PASSWORD', 'farmart_pass')}"
-            f"@{os.environ.get('DB_HOST', 'localhost')}:{os.environ.get('DB_PORT', '5432')}"
-            f"/{os.environ.get('DB_NAME', 'farmart_db')}"
+        default=database_url or (
+            f"postgresql://{os.getenv('DB_USER', 'farmart_user')}:{os.getenv('DB_PASSWORD', 'farmart_pass')}"
+            f"@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}"
+            f"/{os.getenv('DB_NAME', 'farmart_db')}"
         ),
         conn_max_age=600,
     )

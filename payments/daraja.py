@@ -8,6 +8,7 @@ import base64
 import requests
 import logging
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -76,12 +77,16 @@ def initiate_stk_push(phone, amount, account_reference):
         logger.error(f"[Daraja] Could not get access token: {e}")
         raise
 
+    daraja_amount = int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if daraja_amount <= 0:
+        raise ValueError("STK amount must be a positive whole number")
+
     payload = {
         "BusinessShortCode": settings.DARAJA_SHORTCODE,
         "Password": password,
         "Timestamp": timestamp,
         "TransactionType": "CustomerPayBillOnline",
-        "Amount": int(amount),
+        "Amount": daraja_amount,
         "PartyA": phone,
         "PartyB": settings.DARAJA_SHORTCODE,
         "PhoneNumber": phone,
