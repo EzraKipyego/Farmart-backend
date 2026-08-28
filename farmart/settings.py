@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
+from corsheaders.defaults import default_headers
 
 load_dotenv()
 
@@ -84,6 +85,10 @@ SIMPLE_JWT = {
 
 CORS_ALLOWED_ORIGINS = [
     os.environ.get("FRONTEND_ORIGIN", os.environ.get("FRONTEND_URL", "http://localhost:5173")),
+]
+CORS_ALLOW_HEADERS = [
+    *default_headers,
+    "idempotency-key",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
