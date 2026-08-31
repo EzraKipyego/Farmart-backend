@@ -13,7 +13,7 @@ from rest_framework.views import APIView
 from farmart.permissions import IsBuyer
 from orders.models import Order
 
-from .daraja import DarajaResponseError, initiate_stk_push, query_stk_push_status
+from .daraja import DarajaGatewayError, DarajaResponseError, initiate_stk_push, query_stk_push_status
 from .models import Payment
 from .phone_utils import normalize_phone_number
 
@@ -116,10 +116,13 @@ class StkPushView(APIView):
             checkout_request_id, merchant_request_id = initiate_stk_push(phone, order_amount, str(order.id))
         except DarajaResponseError as error:
             logger.error("[payments] Daraja rejected STK push: %s details=%s", error, error.details)
-            return error_response("Unable to send STK push", "DARaja_STK_REJECTED", 502, error.details)
+            return Response({"status": "FAILED", "message": "Unable to send STK push. Please try again."}, status=400)
+        except DarajaGatewayError as error:
+            logger.error("[payments] Daraja gateway error during STK push: %s details=%s", error, error.details)
+            return Response({"status": "FAILED", "message": str(error) or "Payment gateway timeout. Please try again."}, status=getattr(error, "status_code", 504))
         except Exception as error:
             logger.error("[payments] STK push failed: %s", error)
-            return error_response("Could not reach the payment provider, try again", "PAYMENT_PROVIDER_UNAVAILABLE", 502)
+            return Response({"status": "FAILED", "message": "Payment gateway unavailable. Please try again."}, status=504)
 
         payment = Payment.objects.create(
             order=order,
@@ -154,13 +157,20 @@ class PaymentStatusView(APIView):
         if payment.status == "pending":
             try:
                 daraja_status = query_stk_push_status(payment.checkout_request_id)
+            except DarajaGatewayError as exc:
+                logger.warning("[payments] Daraja status query failed for %s: %s", payment.checkout_request_id, exc)
+                return Response({
+                    "checkoutRequestId": payment.checkout_request_id,
+                    "status": "FAILED",
+                    "message": str(exc) or "Payment gateway timeout. Please try again.",
+                }, status=getattr(exc, "status_code", 504))
             except Exception as exc:
                 logger.warning("[payments] Daraja status query failed for %s: %s", payment.checkout_request_id, exc)
                 return Response({
                     "checkoutRequestId": payment.checkout_request_id,
-                    "status": "PENDING",
-                    "message": "Payment verification is still pending; callback has not arrived yet.",
-                }, status=200)
+                    "status": "FAILED",
+                    "message": "Payment gateway timeout. Please try again.",
+                }, status=504)
 
             status_name = daraja_status.get("status", "PENDING")
             message = daraja_status.get("message") or "Payment status query response"

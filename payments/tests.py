@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+import requests
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
@@ -89,3 +90,17 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.data["status"], "COMPLETED")
         self.assertEqual(response.data["message"], "Payment completed")
         mock_query.assert_called_once_with(payment.checkout_request_id)
+
+    @patch("payments.views.query_stk_push_status", side_effect=requests.exceptions.Timeout("timed out"))
+    def test_pending_payment_status_returns_timeout_failure(self, _mock_query):
+        order = Order.objects.create(buyer=self.buyer, payment_status="pending", order_status="pending_payment")
+        payment = Payment.objects.create(
+            order=order, checkout_request_id="ws_CO_timeout", merchant_request_id="merchant_timeout",
+            phone="254708319101", amount=10000, status="pending",
+        )
+
+        response = self.client.get(f"/api/payments/{payment.checkout_request_id}/status")
+
+        self.assertEqual(response.status_code, 504)
+        self.assertEqual(response.data["status"], "FAILED")
+        self.assertIn("Payment gateway timeout", response.data["message"])
