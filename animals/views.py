@@ -22,6 +22,18 @@ class AnimalListCreateView(APIView):
 		if request.query_params.get("search"):
 			search = request.query_params["search"]
 			queryset = queryset.filter(Q(type__icontains=search) | Q(breed__icontains=search) | Q(title__icontains=search))
+		if request.query_params.get("min_age"):
+			try:
+				min_age = float(request.query_params["min_age"])
+				queryset = queryset.filter(age__gte=min_age)
+			except (TypeError, ValueError):
+				pass
+		if request.query_params.get("max_age"):
+			try:
+				max_age = float(request.query_params["max_age"])
+				queryset = queryset.filter(age__lte=max_age)
+			except (TypeError, ValueError):
+				pass
 		return Response(AnimalSerializer(queryset, many=True).data)
 
 	def post(self, request):
