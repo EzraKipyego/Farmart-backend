@@ -11,9 +11,39 @@ from rest_framework.views import APIView
 from farmart.permissions import IsBuyer
 from orders.models import Order
 
-from .daraja import DarajaResponseError, initiate_stk_push
+from .daraja import DarajaResponseError, initiate_stk_push, query_stk_push_status
 from .models import Payment
 from .phone_utils import normalize_phone_number
+
+
+def _apply_payment_result(payment, result_code, result_description, metadata=None):
+    metadata = metadata or {}
+    payment.result_code = str(result_code)
+    payment.result_description = result_description or ""
+    payment.completed_at = timezone.now()
+
+    if result_code == 0:
+        values = {item.get("Name"): item.get("Value") for item in metadata.get("Item", []) if isinstance(item, dict)}
+        payment.status = "success"
+        payment.mpesa_receipt_number = values.get("MpesaReceiptNumber") or payment.mpesa_receipt_number
+        payment.phone = str(values.get("PhoneNumber") or payment.phone)
+        payment.amount = Decimal(str(values.get("Amount") or payment.amount))
+        payment.transaction_date = str(values.get("TransactionDate") or payment.transaction_date or "")
+        payment.order.payment_status = "success"
+        payment.order.order_status = "processing"
+        payment.order.save(update_fields=["payment_status", "order_status"])
+
+        for item in payment.order.items.select_related("animal"):
+            if item.animal_id:
+                item.animal.available = False
+                item.animal.save(update_fields=["available"])
+    else:
+        payment.status = "cancelled" if result_code == 1032 else "failed"
+        payment.order.payment_status = payment.status
+        payment.order.save(update_fields=["payment_status"])
+
+    payment.save()
+    return payment
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +115,35 @@ class PaymentStatusView(APIView):
 
     def get(self, request, checkout_request_id):
         try:
-            payment = Payment.objects.get(checkout_request_id=checkout_request_id, order__buyer=request.user)
+            payment = Payment.objects.select_related("order").get(checkout_request_id=checkout_request_id, order__buyer=request.user)
         except Payment.DoesNotExist:
             return error_response("Payment not found", "PAYMENT_NOT_FOUND", 404)
 
-        result = {"checkoutRequestId": payment.checkout_request_id, "status": payment.status}
+        if payment.status == "pending":
+            try:
+                daraja_status = query_stk_push_status(payment.checkout_request_id)
+            except Exception as exc:
+                logger.warning("[payments] Daraja status query failed for %s: %s", payment.checkout_request_id, exc)
+                return Response({
+                    "checkoutRequestId": payment.checkout_request_id,
+                    "status": "PENDING",
+                    "message": "Payment verification is still pending; callback has not arrived yet.",
+                }, status=200)
+
+            status_name = daraja_status.get("status", "PENDING")
+            message = daraja_status.get("message") or "Payment status query response"
+            if status_name == "COMPLETED":
+                metadata = (daraja_status.get("raw") or {}).get("CallbackMetadata") or {}
+                _apply_payment_result(payment, 0, message, metadata)
+            elif status_name == "FAILED":
+                _apply_payment_result(payment, int(daraja_status.get("raw", {}).get("ResultCode", "1")) or 1, message, {})
+            return Response({
+                "checkoutRequestId": payment.checkout_request_id,
+                "status": status_name,
+                "message": message,
+            }, status=200)
+
+        result = {"checkoutRequestId": payment.checkout_request_id, "status": payment.status.upper() if payment.status else "PENDING"}
         result.update({
             "subtotal": str(payment.order.subtotal),
             "delivery_fee": str(payment.order.delivery_fee),
@@ -99,8 +153,11 @@ class PaymentStatusView(APIView):
         })
         if payment.status == "success":
             result.update({"orderId": str(payment.order_id), "receipt": payment.mpesa_receipt_number})
+            result["message"] = payment.result_description or "Payment completed successfully"
         elif payment.status in ("failed", "cancelled", "timeout"):
             result["message"] = payment.result_description or "The payment request was not completed"
+        else:
+            result["message"] = "Payment is pending confirmation"
         return Response(result)
 
 
@@ -109,8 +166,18 @@ class DarajaCallbackView(APIView):
 
     @transaction.atomic
     def post(self, request):
+        payload = request.data
+        if isinstance(payload, dict) and "Body" in payload and isinstance(payload["Body"], dict):
+            callback = payload["Body"].get("stkCallback")
+        elif isinstance(payload, dict):
+            callback = payload.get("stkCallback") or payload
+        else:
+            callback = None
+
+        if not isinstance(callback, dict):
+            return Response({"message": "Malformed callback payload"}, status=200)
+
         try:
-            callback = request.data["Body"]["stkCallback"]
             checkout_request_id = callback["CheckoutRequestID"]
             result_code = int(callback["ResultCode"])
         except (KeyError, TypeError, ValueError):
@@ -125,23 +192,11 @@ class DarajaCallbackView(APIView):
         if payment.status != "pending":
             return Response({"message": "Callback already processed"}, status=200)
 
-        payment.result_code = str(result_code)
-        payment.result_description = callback.get("ResultDesc", "")
-        payment.completed_at = timezone.now()
-        if result_code == 0:
-            values = {item.get("Name"): item.get("Value") for item in callback.get("CallbackMetadata", {}).get("Item", [])}
-            payment.status = "success"
-            payment.mpesa_receipt_number = values.get("MpesaReceiptNumber")
-            payment.phone = str(values.get("PhoneNumber") or payment.phone)
-            payment.amount = Decimal(str(values.get("Amount") or payment.amount))
-            payment.transaction_date = str(values.get("TransactionDate") or "")
-            payment.order.payment_status = "success"
-            payment.order.order_status = "processing"
-            payment.order.save(update_fields=["payment_status", "order_status"])
-        else:
-            payment.status = "cancelled" if result_code == 1032 else "failed"
-            payment.order.payment_status = payment.status
-            payment.order.save(update_fields=["payment_status"])
-        payment.save()
+        payment = _apply_payment_result(
+            payment,
+            result_code,
+            callback.get("ResultDesc", ""),
+            callback.get("CallbackMetadata", {}),
+        )
         logger.info("[payments] Callback processed for %s: %s", checkout_request_id, payment.status)
         return Response({"message": "Callback received"}, status=200)

@@ -5,7 +5,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 from animals.models import Animal
-from orders.models import Order
+from orders.models import Order, OrderItem
 from payments.models import Payment
 
 
@@ -50,6 +50,10 @@ class PaymentFlowTests(APITestCase):
             order=order, checkout_request_id="ws_CO_callback", merchant_request_id="merchant_callback",
             phone="254708319101", amount=10000,
         )
+        OrderItem.objects.create(
+            order=order, animal=self.animal, farmer_id=self.farmer.id,
+            farmer_name=self.farmer.name, title=self.animal.title, price=self.animal.price, quantity=1, status="pending",
+        )
         response = self.client.post("/api/payments/callback", {
             "Body": {"stkCallback": {
                 "CheckoutRequestID": payment.checkout_request_id, "ResultCode": 0,
@@ -65,6 +69,23 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         payment.refresh_from_db()
         order.refresh_from_db()
+        self.animal.refresh_from_db()
         self.assertEqual(payment.status, "success")
         self.assertEqual(order.payment_status, "success")
         self.assertEqual(order.order_status, "processing")
+        self.assertFalse(self.animal.available)
+
+    @patch("payments.views.query_stk_push_status", return_value={"status": "COMPLETED", "message": "Payment completed"})
+    def test_pending_payment_status_endpoint_queries_daraja(self, mock_query):
+        order = Order.objects.create(buyer=self.buyer, payment_status="pending", order_status="pending_payment")
+        payment = Payment.objects.create(
+            order=order, checkout_request_id="ws_CO_pending", merchant_request_id="merchant_pending",
+            phone="254708319101", amount=10000, status="pending",
+        )
+
+        response = self.client.get(f"/api/payments/{payment.checkout_request_id}/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "COMPLETED")
+        self.assertEqual(response.data["message"], "Payment completed")
+        mock_query.assert_called_once_with(payment.checkout_request_id)
