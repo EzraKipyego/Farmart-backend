@@ -1,77 +1,168 @@
 """
 Daraja (M-Pesa) STK Push integration.
 
-Requires DARAJA_CONSUMER_KEY, DARAJA_CONSUMER_SECRET, DARAJA_SHORTCODE,
-DARAJA_PASSKEY, and DARAJA_CALLBACK_URL to be set in .env. Until then,
-initiate_stk_push() below returns a simulated response so the payment
-flow still works end to end during development.
+Requires MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE,
+MPESA_PASSKEY, and MPESA_CALLBACK_URL to be set in .env.
 """
 import base64
-import requests
+import logging
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
+
+import requests
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 SANDBOX_BASE_URL = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE_URL = "https://api.safaricom.co.ke"
 
 
+class DarajaResponseError(Exception):
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+
 def _base_url():
-    return PRODUCTION_BASE_URL if settings.DARAJA_ENV == "production" else SANDBOX_BASE_URL
+    env = getattr(settings, "DARAJA_ENV", getattr(settings, "MPESA_ENVIRONMENT", "sandbox"))
+    env = str(env).strip().lower()
+    return PRODUCTION_BASE_URL if env == "production" else SANDBOX_BASE_URL
 
 
 def _credentials_configured():
     return bool(
-        settings.DARAJA_CONSUMER_KEY
-        and settings.DARAJA_CONSUMER_SECRET
-        and settings.DARAJA_SHORTCODE
-        and settings.DARAJA_PASSKEY
+        getattr(settings, "DARAJA_CONSUMER_KEY", None)
+        and getattr(settings, "DARAJA_CONSUMER_SECRET", None)
+        and getattr(settings, "DARAJA_SHORTCODE", None)
+        and getattr(settings, "DARAJA_PASSKEY", None)
+        and getattr(settings, "DARAJA_CALLBACK_URL", None)
     )
 
 
 def get_access_token():
-    response = requests.get(
-        f"{_base_url()}/oauth/v1/generate?grant_type=client_credentials",
-        auth=(settings.DARAJA_CONSUMER_KEY, settings.DARAJA_CONSUMER_SECRET),
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.json()["access_token"]
+    """Obtain OAuth access token from Daraja."""
+    try:
+        response = requests.get(
+            f"{_base_url()}/oauth/v1/generate?grant_type=client_credentials",
+            auth=(settings.DARAJA_CONSUMER_KEY, settings.DARAJA_CONSUMER_SECRET),
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()["access_token"]
+    except requests.exceptions.RequestException as error:
+        response = getattr(error, "response", None)
+        logger.error(
+            "[Daraja] OAuth request failed: %s response_status=%s response_body=%s",
+            error,
+            response.status_code if response is not None else None,
+            response.text if response is not None else None,
+        )
+        raise
+    except Exception as error:
+        logger.error("[Daraja] Failed to obtain access token: %s", error)
+        raise
 
 
 def initiate_stk_push(phone, amount, account_reference):
     """
-    Returns (checkout_request_id, simulated: bool).
-    Falls back to a simulated request if Daraja credentials aren't set.
+    Initiate an M-Pesa STK push to the given phone number.
+    
+    Returns:
+        (checkout_request_id, merchant_request_id) on success
+    
+    Raises:
+        Exception if credentials not configured or API call fails
     """
     if not _credentials_configured():
-        return f"sim_{int(datetime.utcnow().timestamp() * 1000)}", True
+        raise ValueError("Daraja credentials are not properly configured")
+    callback_url = str(
+        getattr(
+            settings,
+            "DARAJA_CALLBACK_URL",
+            "https://farmart-backend-02tq.onrender.com/api/payments/callback/",
+        )
+    ).strip()
+    if not callback_url.startswith("https://"):
+        raise ValueError("MPESA_CALLBACK_URL must be a public HTTPS URL")
 
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     password = base64.b64encode(
         f"{settings.DARAJA_SHORTCODE}{settings.DARAJA_PASSKEY}{timestamp}".encode()
     ).decode()
 
-    token = get_access_token()
+    try:
+        token = get_access_token()
+    except Exception as e:
+        logger.error(f"[Daraja] Could not get access token: {e}")
+        raise
+
+    daraja_amount = int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if daraja_amount <= 0:
+        raise ValueError("STK amount must be a positive whole number")
 
     payload = {
         "BusinessShortCode": settings.DARAJA_SHORTCODE,
         "Password": password,
         "Timestamp": timestamp,
         "TransactionType": "CustomerPayBillOnline",
-        "Amount": int(amount),
+        "Amount": daraja_amount,
         "PartyA": phone,
         "PartyB": settings.DARAJA_SHORTCODE,
         "PhoneNumber": phone,
-        "CallBackURL": settings.DARAJA_CALLBACK_URL,
+        "CallBackURL": callback_url,
         "AccountReference": account_reference,
         "TransactionDesc": "Farmart order payment",
     }
 
-    response = requests.post(
-        f"{_base_url()}/mpesa/stkpush/v1/processrequest",
-        json=payload,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=15,
-    )
-    response.raise_for_status()
-    return response.json()["CheckoutRequestID"], False
+    try:
+        response = requests.post(
+            f"{_base_url()}/mpesa/stkpush/v1/processrequest",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"raw_response": response.text[:1000]}
+
+        logger.info("[Daraja] raw STK response status=%s body=%s", response.status_code, data)
+
+        logger.info(
+            "[Daraja] STK response code=%s merchant_request_id=%s checkout_request_id=%s customer_message=%s",
+            data.get("ResponseCode"), data.get("MerchantRequestID"),
+            data.get("CheckoutRequestID"), data.get("CustomerMessage"),
+        )
+        if str(data.get("ResponseCode")) != "0":
+            raise DarajaResponseError(
+                data.get("ResponseDescription") or data.get("CustomerMessage") or "Daraja rejected the STK request",
+                {
+                    "response_code": data.get("ResponseCode"),
+                    "response_description": data.get("ResponseDescription"),
+                    "customer_message": data.get("CustomerMessage"),
+                },
+            )
+
+        checkout_id = data.get("CheckoutRequestID")
+        merchant_id = data.get("MerchantRequestID")
+        
+        if not checkout_id or not merchant_id:
+            logger.error(f"[Daraja] Missing IDs in response: {data}")
+            raise ValueError("Missing CheckoutRequestID or MerchantRequestID in response")
+        
+        logger.info(f"[Daraja] STK push initiated: {checkout_id} for {phone}")
+        return checkout_id, merchant_id
+    except requests.exceptions.RequestException as error:
+        response = getattr(error, "response", None)
+        logger.error(
+            "[Daraja] Safaricom request failed: %s response_status=%s response_body=%s",
+            error,
+            response.status_code if response is not None else None,
+            response.text if response is not None else None,
+        )
+        raise
+    except Exception as error:
+        logger.error("[Daraja] Error initiating STK push: %s", error)
+        raise

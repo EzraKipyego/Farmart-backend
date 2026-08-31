@@ -1,17 +1,25 @@
-# //will com back later// from django.shortcuts import render
-
-# Create your views here.
-import re
 import logging
-from rest_framework.views import APIView
-from rest_framework.response import Response
+from datetime import timedelta
+from decimal import Decimal
+
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import permissions
-from .models import Payment
-from .daraja import initiate_stk_push
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 from farmart.permissions import IsBuyer
+from orders.models import Order
+
+from .daraja import DarajaResponseError, initiate_stk_push
+from .models import Payment
+from .phone_utils import normalize_phone_number
 
 logger = logging.getLogger(__name__)
-PHONE_PATTERN = re.compile(r"^0[71]\d{8}$")
+
+
+def error_response(message, code, status, details=None):
+    return Response({"message": message, "code": code, "details": details or {}}, status=status)
 
 
 class StkPushView(APIView):
@@ -19,76 +27,121 @@ class StkPushView(APIView):
 
     def post(self, request):
         order_id = request.data.get("order_id")
-        phone = request.data.get("phone", "")
-        amount = request.data.get("amount")
+        try:
+            phone = normalize_phone_number(request.data.get("phone") or request.data.get("phone_number", ""))
+            order = Order.objects.prefetch_related("items").get(id=order_id, buyer=request.user)
+        except ValueError:
+            logger.warning("[payments] STK validation failed: invalid phone/order_id; fields=%s", list(request.data.keys()))
+            return error_response("Invalid phone number or order ID", "INVALID_REQUEST", 400)
+        except Order.DoesNotExist:
+            logger.warning("[payments] STK validation failed: order not found; order_id=%s", order_id)
+            return error_response("Order not found", "ORDER_NOT_FOUND", 404)
 
-        if not PHONE_PATTERN.match(phone):
-            return Response({"message": "Enter a valid Safaricom number, e.g. 0712345678"}, status=400)
-        if not amount or amount <= 0:
-            return Response({"message": "Invalid payment amount"}, status=400)
+        order_amount = int(round(float(order.total)))
+        if order_amount <= 0:
+            logger.warning("[payments] STK validation failed: non-positive order total; order_id=%s", order_id)
+            return error_response("Invalid payment amount", "INVALID_AMOUNT", 400)
+        if order.payment_status in ("success",):
+            return error_response("Order is not payable", "ORDER_NOT_PAYABLE", 409)
+
+        active_payment = order.payments.filter(
+            status="pending", created_at__gte=timezone.now() - timedelta(minutes=5)
+        ).order_by("-created_at").first()
+        if active_payment:
+            return Response({
+                "checkoutRequestId": active_payment.checkout_request_id,
+                "merchantRequestId": active_payment.merchant_request_id,
+                "status": "pending",
+                "message": "STK push already in progress",
+            }, status=200)
 
         try:
-            checkout_request_id, simulated = initiate_stk_push(phone, amount, order_id or "Farmart")
+            checkout_request_id, merchant_request_id = initiate_stk_push(phone, order_amount, str(order.id))
+        except DarajaResponseError as error:
+            logger.error("[payments] Daraja rejected STK push: %s details=%s", error, error.details)
+            return error_response("Unable to send STK push", "DARaja_STK_REJECTED", 502, error.details)
         except Exception as error:
-            logger.error(f"[payments] STK push failed: {error}")
-            return Response({"message": "Could not reach the payment provider, try again"}, status=502)
+            logger.error("[payments] STK push failed: %s", error)
+            return error_response("Could not reach the payment provider, try again", "PAYMENT_PROVIDER_UNAVAILABLE", 502)
 
         payment = Payment.objects.create(
-            order_id=order_id,
+            order=order,
             checkout_request_id=checkout_request_id,
+            merchant_request_id=merchant_request_id,
             phone=phone,
-            amount=amount,
-            # Simulated payments resolve immediately since there's no real Daraja
-            # callback to wait for yet. Real payments stay "pending" until
-            # /payments/callback receives Safaricom's webhook.
-            status="success" if simulated else "pending",
+            amount=order_amount,
+            status="pending",
         )
-        return Response({"checkoutRequestId": checkout_request_id, "status": payment.status}, status=201)
+        return Response({
+            "checkoutRequestId": payment.checkout_request_id,
+            "merchantRequestId": payment.merchant_request_id,
+            "status": "pending",
+            "message": "STK push sent",
+        }, status=201)
 
 
 class PaymentStatusView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [IsBuyer]
 
     def get(self, request, checkout_request_id):
         try:
-            payment = Payment.objects.get(checkout_request_id=checkout_request_id)
+            payment = Payment.objects.get(checkout_request_id=checkout_request_id, order__buyer=request.user)
         except Payment.DoesNotExist:
-            return Response({"message": "Payment not found"}, status=404)
-        return Response({"status": payment.status})
+            return error_response("Payment not found", "PAYMENT_NOT_FOUND", 404)
+
+        result = {"checkoutRequestId": payment.checkout_request_id, "status": payment.status}
+        result.update({
+            "subtotal": str(payment.order.subtotal),
+            "delivery_fee": str(payment.order.delivery_fee),
+            "amount": str(payment.order.total),
+            "total": str(payment.order.total),
+            "currency": payment.order.currency,
+        })
+        if payment.status == "success":
+            result.update({"orderId": str(payment.order_id), "receipt": payment.mpesa_receipt_number})
+        elif payment.status in ("failed", "cancelled", "timeout"):
+            result["message"] = payment.result_description or "The payment request was not completed"
+        return Response(result)
 
 
 class DarajaCallbackView(APIView):
-    """
-    Safaricom posts here after the customer completes or cancels the STK
-    push prompt on their phone. Body shape follows Daraja's documented
-    STK callback format.
-    """
     permission_classes = [permissions.AllowAny]
 
+    @transaction.atomic
     def post(self, request):
-        data = request.data
-        logger.info(f"[payments] Daraja callback received: {data}")
+        try:
+            callback = request.data["Body"]["stkCallback"]
+            checkout_request_id = callback["CheckoutRequestID"]
+            result_code = int(callback["ResultCode"])
+        except (KeyError, TypeError, ValueError):
+            return Response({"message": "Malformed callback payload"}, status=200)
 
         try:
-            stk_callback = data["Body"]["stkCallback"]
-            checkout_request_id = stk_callback["CheckoutRequestID"]
-            result_code = stk_callback["ResultCode"]
-        except (KeyError, TypeError):
-            return Response({"message": "Malformed callback payload"}, status=400)
-
-        try:
-            payment = Payment.objects.get(checkout_request_id=checkout_request_id)
+            payment = Payment.objects.select_for_update().select_related("order").get(checkout_request_id=checkout_request_id)
         except Payment.DoesNotExist:
-            return Response({"message": "Unknown payment"}, status=404)
+            logger.warning("[payments] Callback for unknown checkout request: %s", checkout_request_id)
+            return Response({"message": "Callback received"}, status=200)
 
+        if payment.status != "pending":
+            return Response({"message": "Callback already processed"}, status=200)
+
+        payment.result_code = str(result_code)
+        payment.result_description = callback.get("ResultDesc", "")
+        payment.completed_at = timezone.now()
         if result_code == 0:
+            values = {item.get("Name"): item.get("Value") for item in callback.get("CallbackMetadata", {}).get("Item", [])}
             payment.status = "success"
-            items = stk_callback.get("CallbackMetadata", {}).get("Item", [])
-            receipt_item = next((i for i in items if i.get("Name") == "MpesaReceiptNumber"), None)
-            if receipt_item:
-                payment.mpesa_receipt = receipt_item.get("Value")
+            payment.mpesa_receipt_number = values.get("MpesaReceiptNumber")
+            payment.phone = str(values.get("PhoneNumber") or payment.phone)
+            payment.amount = Decimal(str(values.get("Amount") or payment.amount))
+            payment.transaction_date = str(values.get("TransactionDate") or "")
+            payment.order.payment_status = "success"
+            payment.order.order_status = "processing"
+            payment.order.save(update_fields=["payment_status", "order_status"])
         else:
-            payment.status = "failed"
-
+            payment.status = "cancelled" if result_code == 1032 else "failed"
+            payment.order.payment_status = payment.status
+            payment.order.save(update_fields=["payment_status"])
         payment.save()
-        return Response({"message": "Callback received"})
+        logger.info("[payments] Callback processed for %s: %s", checkout_request_id, payment.status)
+        return Response({"message": "Callback received"}, status=200)
