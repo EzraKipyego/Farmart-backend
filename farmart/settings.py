@@ -84,6 +84,7 @@ DATABASES = {
 }
 
 AUTH_USER_MODEL = "accounts.User"
+AUTHENTICATION_BACKENDS = ("accounts.backends.RoleEmailBackend",)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
@@ -107,6 +108,10 @@ CORS_ALLOW_HEADERS = [
     "idempotency-key",
 ]
 CORS_ALLOW_CREDENTIALS = True
+
+FRONTEND_ORIGIN = env_value("FRONTEND_ORIGIN", env_value("FRONTEND_URL", "http://localhost:5173"))
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = env_value("DEFAULT_FROM_EMAIL", "noreply@farmart.local")
 
 # Daraja (M-Pesa) sandbox credentials. Leave blank during development —
 # the payments app falls back to a simulated STK push until these are
