@@ -25,7 +25,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=120)
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     role = models.CharField(max_length=20, choices=ROLE_CHOICES)
     phone = models.CharField(max_length=20, blank=True, default="")
     county = models.CharField(max_length=80, blank=True, default="")
@@ -36,8 +36,15 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
 
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["name"]
+    # Django requires USERNAME_FIELD to identify one account. Farmart login
+    # deliberately uses email plus role through RoleEmailBackend instead.
+    USERNAME_FIELD = "id"
+    REQUIRED_FIELDS = ["email", "name"]
 
     def __str__(self):
-        return self.email
+        return f"{self.email} ({self.role})"
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["email", "role"], name="unique_email_role"),
+        ]
