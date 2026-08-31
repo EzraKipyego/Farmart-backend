@@ -20,6 +20,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = env_value("DJANGO_SECRET_KEY", "dev-secret-change-me")
 DEBUG = env_value("DEBUG", "True").lower() in ("true", "1", "yes")
 ALLOWED_HOSTS = ["*"]
+APPEND_SLASH = False
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -114,7 +115,7 @@ DARAJA_CONSUMER_KEY = env_value("MPESA_CONSUMER_KEY", env_value("DARAJA_CONSUMER
 DARAJA_CONSUMER_SECRET = env_value("MPESA_CONSUMER_SECRET", env_value("DARAJA_CONSUMER_SECRET"))
 DARAJA_SHORTCODE = env_value("MPESA_SHORTCODE", env_value("DARAJA_SHORTCODE"))
 DARAJA_PASSKEY = env_value("MPESA_PASSKEY", env_value("DARAJA_PASSKEY"))
-DEFAULT_MPESA_CALLBACK_URL = "https://farmart-backend-02tq.onrender.com/api/payments/callback/"
+DEFAULT_MPESA_CALLBACK_URL = "https://farmart-backend-02tq.onrender.com/api/payments/callback"
 DARAJA_CALLBACK_URL = (
     env_value("MPESA_CALLBACK_URL", env_value("DARAJA_CALLBACK_URL"))
     or DEFAULT_MPESA_CALLBACK_URL

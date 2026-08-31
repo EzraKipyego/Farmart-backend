@@ -24,6 +24,13 @@ class DarajaResponseError(Exception):
         self.details = details or {}
 
 
+class DarajaGatewayError(Exception):
+    def __init__(self, message, details=None, status_code=504):
+        super().__init__(message)
+        self.details = details or {}
+        self.status_code = status_code
+
+
 def _base_url():
     env = getattr(settings, "DARAJA_ENV", getattr(settings, "MPESA_ENVIRONMENT", "sandbox"))
     env = str(env).strip().lower()
@@ -58,10 +65,14 @@ def get_access_token():
             response.status_code if response is not None else None,
             response.text if response is not None else None,
         )
-        raise
+        raise DarajaGatewayError(
+            "Payment gateway timeout. Please try again.",
+            {"error": str(error), "response_status": response.status_code if response is not None else None},
+            504 if isinstance(error, requests.exceptions.Timeout) else 502,
+        ) from error
     except Exception as error:
         logger.error("[Daraja] Failed to obtain access token: %s", error)
-        raise
+        raise DarajaGatewayError("Payment gateway unavailable. Please try again.", {"error": str(error)}, 502) from error
 
 
 def initiate_stk_push(phone, amount, account_reference):
@@ -120,7 +131,7 @@ def initiate_stk_push(phone, amount, account_reference):
             f"{_base_url()}/mpesa/stkpush/v1/processrequest",
             json=payload,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
+            timeout=10,
         )
         response.raise_for_status()
         try:
@@ -147,11 +158,11 @@ def initiate_stk_push(phone, amount, account_reference):
 
         checkout_id = data.get("CheckoutRequestID")
         merchant_id = data.get("MerchantRequestID")
-        
+
         if not checkout_id or not merchant_id:
             logger.error(f"[Daraja] Missing IDs in response: {data}")
             raise ValueError("Missing CheckoutRequestID or MerchantRequestID in response")
-        
+
         logger.info(f"[Daraja] STK push initiated: {checkout_id} for {phone}")
         return checkout_id, merchant_id
     except requests.exceptions.RequestException as error:
@@ -162,7 +173,67 @@ def initiate_stk_push(phone, amount, account_reference):
             response.status_code if response is not None else None,
             response.text if response is not None else None,
         )
-        raise
+        raise DarajaGatewayError(
+            "Payment gateway timeout. Please try again.",
+            {"error": str(error), "response_status": response.status_code if response is not None else None},
+            504 if isinstance(error, requests.exceptions.Timeout) else 502,
+        ) from error
     except Exception as error:
         logger.error("[Daraja] Error initiating STK push: %s", error)
-        raise
+        raise DarajaGatewayError("Payment gateway unavailable. Please try again.", {"error": str(error)}, 502) from error
+
+
+def query_stk_push_status(checkout_request_id):
+    """Poll Daraja to verify the final status of an STK Push transaction."""
+    if not _credentials_configured():
+        raise ValueError("Daraja credentials are not properly configured")
+    if not checkout_request_id:
+        raise ValueError("CheckoutRequestID is required")
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    password = base64.b64encode(
+        f"{settings.DARAJA_SHORTCODE}{settings.DARAJA_PASSKEY}{timestamp}".encode()
+    ).decode()
+
+    token = get_access_token()
+    payload = {
+        "BusinessShortCode": settings.DARAJA_SHORTCODE,
+        "Password": password,
+        "Timestamp": timestamp,
+        "CheckoutRequestID": checkout_request_id,
+    }
+
+    try:
+        response = requests.post(
+            f"{_base_url()}/mpesa/stkpushquery/v1/query",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info("[Daraja] STK query response for %s: %s", checkout_request_id, data)
+
+        result_code = data.get("ResultCode")
+        result_description = data.get("ResultDesc") or data.get("ResponseDescription") or "M-Pesa status query response"
+        if str(result_code) == "0":
+            return {"status": "COMPLETED", "message": result_description, "raw": data}
+        if result_code in ("10200", "1032", "1037"):
+            return {"status": "PENDING", "message": result_description, "raw": data}
+        return {"status": "FAILED", "message": result_description, "raw": data}
+    except requests.exceptions.RequestException as error:
+        response = getattr(error, "response", None)
+        logger.error(
+            "[Daraja] STK query request failed: %s response_status=%s response_body=%s",
+            error,
+            response.status_code if response is not None else None,
+            response.text if response is not None else None,
+        )
+        raise DarajaGatewayError(
+            "Payment gateway timeout. Please try again.",
+            {"error": str(error), "response_status": response.status_code if response is not None else None},
+            504 if isinstance(error, requests.exceptions.Timeout) else 502,
+        ) from error
+    except ValueError as error:
+        logger.error("[Daraja] STK query returned malformed JSON: %s", error)
+        raise DarajaGatewayError("Payment gateway unavailable. Please try again.", {"error": str(error)}, 502) from error
