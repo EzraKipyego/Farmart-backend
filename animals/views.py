@@ -14,7 +14,7 @@ class AnimalListCreateView(APIView):
 		return [IsFarmer()] if self.request.method == "POST" else [permissions.AllowAny()]
 
 	def get(self, request):
-		queryset = Animal.objects.all()
+		queryset = Animal.objects.filter(available=True)
 		if request.query_params.get("type"):
 			queryset = queryset.filter(type=request.query_params["type"])
 		if request.query_params.get("breed"):
