@@ -11,8 +11,12 @@ from decimal import Decimal, ROUND_HALF_UP
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
+
+DARAJA_ACCESS_TOKEN_CACHE_KEY = "daraja_access_token"
+DARAJA_ACCESS_TOKEN_TTL_SECONDS = 3500
 
 SANDBOX_BASE_URL = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE_URL = "https://api.safaricom.co.ke"
@@ -65,31 +69,74 @@ def _credentials_configured():
 
 
 def get_access_token():
-    """Obtain OAuth access token from Daraja."""
+    """Obtain and cache OAuth access token from Daraja."""
+    cached_token = cache.get(DARAJA_ACCESS_TOKEN_CACHE_KEY)
+    if cached_token:
+        return cached_token
+
     try:
         response = requests.get(
             f"{_base_url()}/oauth/v1/generate?grant_type=client_credentials",
             auth=(settings.DARAJA_CONSUMER_KEY, settings.DARAJA_CONSUMER_SECRET),
             timeout=10,
         )
-        response.raise_for_status()
-        return response.json()["access_token"]
+        if response.status_code != 200:
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str):
+                response_text = str(response_text)
+            raw_body = response_text[:2000]
+            logger.error(
+                "[Daraja] OAuth request blocked: status=%s body=%s",
+                response.status_code,
+                raw_body,
+            )
+            raise DarajaGatewayError(
+                "Gateway busy, checking local status...",
+                {"response_status": response.status_code, "response_body": raw_body},
+                503,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError:
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str):
+                response_text = str(response_text)
+            raw_body = response_text[:2000]
+            logger.error("[Daraja] OAuth response was not valid JSON: %s", raw_body)
+            raise DarajaGatewayError(
+                "Gateway busy, checking local status...",
+                {"response_status": response.status_code, "response_body": raw_body},
+                503,
+            )
+
+        token = payload.get("access_token")
+        if not token:
+            raw_body = str(payload)[:2000]
+            logger.error("[Daraja] OAuth response missing access token: %s", raw_body)
+            raise DarajaGatewayError("Gateway busy, checking local status...", {"payload": payload}, 503)
+
+        cache.set(DARAJA_ACCESS_TOKEN_CACHE_KEY, token, DARAJA_ACCESS_TOKEN_TTL_SECONDS)
+        return token
+    except DarajaGatewayError:
+        raise
     except requests.exceptions.RequestException as error:
         response = getattr(error, "response", None)
+        response_body = response.text if response is not None else str(error)
         logger.error(
             "[Daraja] OAuth request failed: %s response_status=%s response_body=%s",
             error,
             response.status_code if response is not None else None,
-            response.text if response is not None else None,
+            response_body,
         )
         raise DarajaGatewayError(
-            "Payment gateway timeout. Please try again.",
+            "Gateway busy, checking local status...",
             {"error": str(error), "response_status": response.status_code if response is not None else None},
-            504 if isinstance(error, requests.exceptions.Timeout) else 502,
+            503,
         ) from error
     except Exception as error:
         logger.error("[Daraja] Failed to obtain access token: %s", error)
-        raise DarajaGatewayError("Payment gateway unavailable. Please try again.", {"error": str(error)}, 502) from error
+        raise DarajaGatewayError("Gateway busy, checking local status...", {"error": str(error)}, 503) from error
 
 
 def initiate_stk_push(phone, amount, account_reference):
@@ -212,7 +259,11 @@ def query_stk_push_status(checkout_request_id):
         f"{settings.DARAJA_SHORTCODE}{settings.DARAJA_PASSKEY}{timestamp}".encode()
     ).decode()
 
-    token = get_access_token()
+    try:
+        token = get_access_token()
+    except DarajaGatewayError:
+        return {"status": "PENDING", "message": "Gateway busy, checking local status...", "raw": {"blocked": True}}
+
     payload = {
         "BusinessShortCode": settings.DARAJA_SHORTCODE,
         "Password": password,
@@ -227,8 +278,29 @@ def query_stk_push_status(checkout_request_id):
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
-        response.raise_for_status()
-        data = response.json()
+
+        if response.status_code != 200:
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str):
+                response_text = str(response_text)
+            raw_text = response_text[:2000]
+            logger.warning(
+                "[Daraja] STK query blocked by gateway: status=%s body=%s",
+                response.status_code,
+                raw_text,
+            )
+            return {"status": "PENDING", "message": "Gateway busy, checking local status...", "raw": {"response_status": response.status_code, "response_body": raw_text}}
+
+        try:
+            data = response.json()
+        except ValueError as error:
+            response_text = getattr(response, "text", "")
+            if not isinstance(response_text, str):
+                response_text = str(response_text)
+            raw_text = response_text[:2000]
+            logger.warning("[Daraja] STK query returned non-JSON body: %s", raw_text)
+            return {"status": "PENDING", "message": "Gateway busy, checking local status...", "raw": {"response_status": response.status_code, "response_body": raw_text, "error": str(error)}}
+
         logger.info("[Daraja] STK query response for %s: %s", checkout_request_id, data)
 
         result_code = _coerce_result_code(data.get("ResultCode"))
@@ -240,17 +312,17 @@ def query_stk_push_status(checkout_request_id):
         return {"status": "FAILED", "message": result_description, "raw": data}
     except requests.exceptions.RequestException as error:
         response = getattr(error, "response", None)
+        response_text = getattr(response, "text", "") if response is not None else ""
+        if not isinstance(response_text, str):
+            response_text = str(response_text)
+        response_body = response_text if response is not None else str(error)
         logger.error(
             "[Daraja] STK query request failed: %s response_status=%s response_body=%s",
             error,
             response.status_code if response is not None else None,
-            response.text if response is not None else None,
+            response_body,
         )
-        raise DarajaGatewayError(
-            "Payment gateway timeout. Please try again.",
-            {"error": str(error), "response_status": response.status_code if response is not None else None},
-            504 if isinstance(error, requests.exceptions.Timeout) else 502,
-        ) from error
+        return {"status": "PENDING", "message": "Gateway busy, checking local status...", "raw": {"error": str(error), "response_status": response.status_code if response is not None else None, "response_body": response_body}}
     except ValueError as error:
         logger.error("[Daraja] STK query returned malformed JSON: %s", error)
-        raise DarajaGatewayError("Payment gateway unavailable. Please try again.", {"error": str(error)}, 502) from error
+        return {"status": "PENDING", "message": "Gateway busy, checking local status...", "raw": {"error": str(error)}}

@@ -104,6 +104,7 @@ class PaymentFlowTests(APITestCase):
     @patch("payments.daraja.requests.post")
     def test_query_stk_push_status_handles_integer_result_codes(self, mock_post, _mock_token):
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status.return_value = None
         mock_response.json.return_value = {"ResultCode": 0, "ResultDesc": "The service request is processed successfully."}
         mock_post.return_value = mock_response
@@ -125,6 +126,6 @@ class PaymentFlowTests(APITestCase):
 
         response = self.client.get(f"/api/payments/{payment.checkout_request_id}/status")
 
-        self.assertEqual(response.status_code, 504)
-        self.assertEqual(response.data["status"], "FAILED")
-        self.assertIn("Payment gateway timeout", response.data["message"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "PENDING")
+        self.assertIn("Gateway busy, checking local status", response.data["message"])

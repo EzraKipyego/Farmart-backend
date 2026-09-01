@@ -169,22 +169,31 @@ class PaymentStatusView(APIView):
                 daraja_status = query_stk_push_status(payment.checkout_request_id)
             except DarajaGatewayError as exc:
                 logger.warning("[payments] Daraja status query failed for %s: %s", payment.checkout_request_id, exc)
+                local_status = _api_status_from_payment(payment.status)
                 return Response({
                     "checkoutRequestId": payment.checkout_request_id,
-                    "status": "FAILED",
-                    "message": str(exc) or "Payment gateway timeout. Please try again.",
-                }, status=getattr(exc, "status_code", 504))
+                    "status": local_status,
+                    "message": "Gateway busy, checking local status...",
+                }, status=200)
             except Exception as exc:
                 logger.warning("[payments] Daraja status query failed for %s: %s", payment.checkout_request_id, exc)
+                local_status = _api_status_from_payment(payment.status)
                 return Response({
                     "checkoutRequestId": payment.checkout_request_id,
-                    "status": "FAILED",
-                    "message": "Payment gateway timeout. Please try again.",
-                }, status=504)
+                    "status": local_status,
+                    "message": "Gateway busy, checking local status...",
+                }, status=200)
 
             status_name = daraja_status.get("status", "PENDING")
             message = daraja_status.get("message") or "Payment status query response"
             raw_result = daraja_status.get("raw") or {}
+            if message == "Gateway busy, checking local status...":
+                local_status = _api_status_from_payment(payment.status)
+                return Response({
+                    "checkoutRequestId": payment.checkout_request_id,
+                    "status": local_status,
+                    "message": message,
+                }, status=200)
             if status_name == "COMPLETED":
                 metadata = raw_result.get("CallbackMetadata") or raw_result.get("ResultMetadata") or {}
                 _apply_payment_result(payment, 0, message, metadata)
