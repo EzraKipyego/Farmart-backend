@@ -18,6 +18,23 @@ SANDBOX_BASE_URL = "https://sandbox.safaricom.co.ke"
 PRODUCTION_BASE_URL = "https://api.safaricom.co.ke"
 
 
+def _coerce_result_code(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class DarajaResponseError(Exception):
     def __init__(self, message, details=None):
         super().__init__(message)
@@ -214,11 +231,11 @@ def query_stk_push_status(checkout_request_id):
         data = response.json()
         logger.info("[Daraja] STK query response for %s: %s", checkout_request_id, data)
 
-        result_code = data.get("ResultCode")
+        result_code = _coerce_result_code(data.get("ResultCode"))
         result_description = data.get("ResultDesc") or data.get("ResponseDescription") or "M-Pesa status query response"
-        if str(result_code) == "0":
+        if result_code == 0:
             return {"status": "COMPLETED", "message": result_description, "raw": data}
-        if result_code in ("10200", "1032", "1037"):
+        if result_code in (10200, 1032, 1037):
             return {"status": "PENDING", "message": result_description, "raw": data}
         return {"status": "FAILED", "message": result_description, "raw": data}
     except requests.exceptions.RequestException as error:

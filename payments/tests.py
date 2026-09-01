@@ -1,6 +1,7 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import requests
+from django.test import override_settings
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
@@ -90,6 +91,29 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.data["status"], "COMPLETED")
         self.assertEqual(response.data["message"], "Payment completed")
         mock_query.assert_called_once_with(payment.checkout_request_id)
+
+    @override_settings(
+        DARAJA_CONSUMER_KEY="consumer_key",
+        DARAJA_CONSUMER_SECRET="consumer_secret",
+        DARAJA_SHORTCODE="174379",
+        DARAJA_PASSKEY="passkey",
+        DARAJA_CALLBACK_URL="https://example.com/api/payments/callback/",
+        DARAJA_ENV="sandbox",
+    )
+    @patch("payments.daraja.get_access_token", return_value="token-123")
+    @patch("payments.daraja.requests.post")
+    def test_query_stk_push_status_handles_integer_result_codes(self, mock_post, _mock_token):
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"ResultCode": 0, "ResultDesc": "The service request is processed successfully."}
+        mock_post.return_value = mock_response
+
+        result = __import__("payments.daraja", fromlist=["query_stk_push_status"]).query_stk_push_status("ws_CO_success")
+        self.assertEqual(result["status"], "COMPLETED")
+
+        mock_response.json.return_value = {"ResultCode": 1032, "ResultDesc": "Request cancelled."}
+        result = __import__("payments.daraja", fromlist=["query_stk_push_status"]).query_stk_push_status("ws_CO_pending")
+        self.assertEqual(result["status"], "PENDING")
 
     @patch("payments.views.query_stk_push_status", side_effect=requests.exceptions.Timeout("timed out"))
     def test_pending_payment_status_returns_timeout_failure(self, _mock_query):

@@ -20,11 +20,17 @@ from .phone_utils import normalize_phone_number
 
 def _apply_payment_result(payment, result_code, result_description, metadata=None):
     metadata = metadata or {}
+    normalized_result_code = None
+    try:
+        normalized_result_code = int(str(result_code).strip())
+    except (TypeError, ValueError):
+        normalized_result_code = None
+
     payment.result_code = str(result_code)
     payment.result_description = result_description or ""
     payment.completed_at = timezone.now()
 
-    if result_code == 0:
+    if normalized_result_code == 0:
         values = {item.get("Name"): item.get("Value") for item in metadata.get("Item", []) if isinstance(item, dict)}
         payment.status = "success"
         payment.mpesa_receipt_number = values.get("MpesaReceiptNumber") or payment.mpesa_receipt_number
@@ -38,9 +44,11 @@ def _apply_payment_result(payment, result_code, result_description, metadata=Non
         for item in payment.order.items.select_related("animal"):
             if item.animal_id:
                 item.animal.available = False
+                if hasattr(item.animal, "is_available"):
+                    item.animal.is_available = False
                 item.animal.save(update_fields=["available"])
     else:
-        payment.status = "cancelled" if result_code == 1032 else "failed"
+        payment.status = "cancelled" if normalized_result_code == 1032 else "failed"
         payment.order.payment_status = payment.status
         payment.order.save(update_fields=["payment_status"])
 
@@ -215,7 +223,7 @@ class DarajaCallbackView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        logger.info("[payments] Daraja callback headers: %s", dict(request.headers))
+        logger.info("[payments] Daraja callback received: method=%s path=%s headers=%s query=%s", request.method, request.path, dict(request.headers), dict(request.GET))
         raw_body = request.body.decode("utf-8", errors="replace") if request.body else ""
         logger.info("[payments] Daraja callback raw payload: %s", raw_body)
 
@@ -233,9 +241,12 @@ class DarajaCallbackView(APIView):
 
         try:
             checkout_request_id = callback["CheckoutRequestID"]
-            result_code = int(callback["ResultCode"])
+            result_code_value = callback.get("ResultCode")
+            if result_code_value is None:
+                raise KeyError("ResultCode")
+            result_code = int(str(result_code_value).strip())
         except (KeyError, TypeError, ValueError):
-            logger.warning("[payments] Missing ResultCode or CheckoutRequestID in callback: %s", callback)
+            logger.warning("[payments] Missing or invalid ResultCode/CheckoutRequestID in callback: %s", callback)
             return Response({"message": "Malformed callback payload"}, status=200)
 
         try:
