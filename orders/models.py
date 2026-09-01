@@ -57,10 +57,17 @@ class Order(models.Model):
     def to_buyer_dict(self):
         items = list(self.items.all())
         farmer_names = sorted({i.farmer_name for i in items})
+
+        buyer_status = self.order_status
+        if self.order_status in {"accepted", "dispatched", "delivered"}:
+            buyer_status = "completed"
+        elif self.order_status == "cancelled":
+            buyer_status = "rejected"
+
         return {
             "id": str(self.id),
             "orderId": str(self.id),
-            "status": self.order_status,
+            "status": buyer_status,
             "payment_status": self.payment_status,
             "items": [i.to_dict() for i in items],
             "subtotal": str(self.subtotal),
@@ -110,9 +117,18 @@ class OrderItem(models.Model):
     status = models.CharField(max_length=20, default="pending")  # pending | confirmed | rejected
 
     def to_dict(self):
+        image = ""
+        description = ""
+        if self.animal_id and self.animal:
+            image = self.animal.image or ""
+            description = self.animal.description or ""
+
         return {
             "animalId": str(self.animal_id) if self.animal_id else None,
             "title": self.title,
             "quantity": self.quantity,
             "price": self.price,
+            "image": image,
+            "description": description,
+            "status": self.status,
         }

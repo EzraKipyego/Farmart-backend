@@ -92,6 +92,53 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.data["message"], "Payment completed")
         mock_query.assert_called_once_with(payment.checkout_request_id)
 
+    def test_farmer_accept_marks_buyer_order_completed(self):
+        farmer = User.objects.create_user("farmer2@example.com", "Farmer2", "password", role="farmer")
+        self.animal.image = "https://example.com/goat.jpg"
+        self.animal.description = "Healthy dairy goat"
+        self.animal.save(update_fields=["image", "description"])
+
+        order = Order.objects.create(
+            buyer=self.buyer,
+            delivery_name="Buyer",
+            delivery_phone="0708319101",
+            payment_status="success",
+            order_status="processing",
+            subtotal=1000,
+            delivery_fee=100,
+            total=1100,
+            currency="KES",
+        )
+        item = OrderItem.objects.create(
+            order=order,
+            animal=self.animal,
+            farmer_id=farmer.id,
+            farmer_name=farmer.name,
+            title=self.animal.title,
+            price=self.animal.price,
+            quantity=1,
+            status="pending",
+        )
+
+        self.client.force_authenticate(farmer)
+        response = self.client.patch(f"/api/orders/{order.id}", {"status": "accepted"}, format="json")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "completed")
+
+        order.refresh_from_db()
+        item.refresh_from_db()
+        self.assertEqual(order.order_status, "accepted")
+        self.assertEqual(item.status, "confirmed")
+
+        self.client.force_authenticate(self.buyer)
+        buyer_orders = self.client.get("/api/orders")
+        self.assertEqual(buyer_orders.status_code, 200)
+        self.assertTrue(any(order_item["status"] == "completed" for order_item in buyer_orders.data))
+        self.assertIn("image", buyer_orders.data[0]["items"][0])
+        self.assertEqual(buyer_orders.data[0]["items"][0]["image"], "https://example.com/goat.jpg")
+        self.assertEqual(buyer_orders.data[0]["items"][0]["description"], "Healthy dairy goat")
+
     @override_settings(
         DARAJA_CONSUMER_KEY="consumer_key",
         DARAJA_CONSUMER_SECRET="consumer_secret",

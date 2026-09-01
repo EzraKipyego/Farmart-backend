@@ -150,12 +150,17 @@ class OrderStatusView(APIView):
         except Order.DoesNotExist:
             return Response({"message": "Order not found"}, status=404)
 
-        requested_status = request.data.get("status")
-        new_status = requested_status
-        if new_status == "confirmed":
+        requested_status = str(request.data.get("status") or "").strip().lower()
+        if requested_status in {"accept", "accepted", "confirmed"}:
             new_status = "accepted"
-        elif new_status == "rejected":
+            response_status = "completed"
+        elif requested_status in {"reject", "rejected", "cancelled"}:
             new_status = "cancelled"
+            response_status = "rejected"
+        else:
+            new_status = requested_status
+            response_status = requested_status
+
         if order.payment_status != "success":
             return Response({"message": "Unpaid orders cannot be processed", "code": "PAYMENT_REQUIRED", "details": {}}, status=409)
 
@@ -169,5 +174,4 @@ class OrderStatusView(APIView):
         farmer_items.update(status="confirmed" if new_status in ("processing", "accepted", "dispatched", "delivered") else "rejected")
         order.order_status = new_status
         order.save(update_fields=["order_status"])
-        response_status = requested_status if requested_status in ("confirmed", "rejected") else order.order_status
         return Response({"id": str(order.id), "status": response_status, "payment_status": order.payment_status})
