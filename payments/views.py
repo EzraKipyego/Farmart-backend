@@ -271,9 +271,9 @@ class DarajaCallbackView(APIView):
 
                 payment = None
                 if checkout_request_id:
-                    payment = Payment.objects.select_for_update().select_related("order").filter(checkout_request_id=checkout_request_id).first()
+                    payment = Payment.objects.select_related("order").filter(checkout_request_id=checkout_request_id).first()
                 if payment is None and merchant_request_id:
-                    payment = Payment.objects.select_for_update().select_related("order").filter(merchant_request_id=merchant_request_id).first()
+                    payment = Payment.objects.select_related("order").filter(merchant_request_id=merchant_request_id).first()
                 if payment is None:
                     logger.warning("[payments] Callback for unknown checkout request: %s merchant=%s", checkout_request_id, merchant_request_id)
                     return JsonResponse(response_payload)
@@ -298,9 +298,9 @@ class DarajaCallbackView(APIView):
             else:
                 payment = None
                 if checkout_request_id:
-                    payment = Payment.objects.select_for_update().select_related("order").filter(checkout_request_id=checkout_request_id).first()
+                    payment = Payment.objects.select_related("order").filter(checkout_request_id=checkout_request_id).first()
                 if payment is None and merchant_request_id:
-                    payment = Payment.objects.select_for_update().select_related("order").filter(merchant_request_id=merchant_request_id).first()
+                    payment = Payment.objects.select_related("order").filter(merchant_request_id=merchant_request_id).first()
                 if payment is not None:
                     payment.result_code = str(result_code)
                     payment.result_description = result_description
