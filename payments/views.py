@@ -1,8 +1,10 @@
+import json
 import logging
 from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
+from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -223,47 +225,86 @@ class DarajaCallbackView(APIView):
 
     @transaction.atomic
     def post(self, request):
-        logger.info("[payments] Daraja callback received: method=%s path=%s headers=%s query=%s", request.method, request.path, dict(request.headers), dict(request.GET))
+        response_payload = {"ResultCode": 0, "ResultDesc": "Accepted"}
         raw_body = request.body.decode("utf-8", errors="replace") if request.body else ""
+        logger.info("[payments] Daraja callback received: method=%s path=%s headers=%s query=%s", request.method, request.path, dict(request.headers), dict(request.GET))
         logger.info("[payments] Daraja callback raw payload: %s", raw_body)
 
-        payload = request.data
-        if isinstance(payload, dict) and "Body" in payload and isinstance(payload["Body"], dict):
-            callback = payload["Body"].get("stkCallback")
-        elif isinstance(payload, dict):
-            callback = payload.get("stkCallback") or payload
-        else:
-            callback = None
-
-        if not isinstance(callback, dict):
-            logger.warning("[payments] Malformed callback payload: %s", payload)
-            return Response({"message": "Malformed callback payload"}, status=200)
-
         try:
-            checkout_request_id = callback["CheckoutRequestID"]
+            data = json.loads(raw_body) if raw_body else {}
+            if not isinstance(data, dict):
+                raise ValueError("Callback payload is not a JSON object")
+
+            body = data.get("Body") or {}
+            callback = body.get("stkCallback") if isinstance(body, dict) else None
+            if callback is None:
+                callback = data.get("stkCallback") or data
+            if not isinstance(callback, dict):
+                raise ValueError("Missing stkCallback in payload")
+
             result_code_value = callback.get("ResultCode")
             if result_code_value is None:
-                raise KeyError("ResultCode")
+                raise ValueError("Missing ResultCode in callback payload")
+
             result_code = int(str(result_code_value).strip())
-        except (KeyError, TypeError, ValueError):
-            logger.warning("[payments] Missing or invalid ResultCode/CheckoutRequestID in callback: %s", callback)
-            return Response({"message": "Malformed callback payload"}, status=200)
+            checkout_request_id = callback.get("CheckoutRequestID")
+            merchant_request_id = callback.get("MerchantRequestID")
+            result_description = callback.get("ResultDesc") or "Daraja callback received"
 
-        try:
-            payment = Payment.objects.select_for_update().select_related("order").get(checkout_request_id=checkout_request_id)
-        except Payment.DoesNotExist:
-            logger.warning("[payments] Callback for unknown checkout request: %s", checkout_request_id)
-            return Response({"message": "Callback received"}, status=200)
+            if result_code == 0:
+                metadata = callback.get("CallbackMetadata") or {}
+                items = metadata.get("Item", []) if isinstance(metadata, dict) else []
+                receipt_number = None
+                for item in items:
+                    if isinstance(item, dict) and item.get("Name") == "MpesaReceiptNumber":
+                        receipt_number = item.get("Value")
+                        break
 
-        if payment.status != "pending":
-            return Response({"message": "Callback already processed"}, status=200)
+                payment = None
+                if checkout_request_id:
+                    payment = Payment.objects.select_for_update().select_related("order").filter(checkout_request_id=checkout_request_id).first()
+                if payment is None and merchant_request_id:
+                    payment = Payment.objects.select_for_update().select_related("order").filter(merchant_request_id=merchant_request_id).first()
+                if payment is None:
+                    logger.warning("[payments] Callback for unknown checkout request: %s merchant=%s", checkout_request_id, merchant_request_id)
+                    return JsonResponse(response_payload)
 
-        result_description = callback.get("ResultDesc") or "Daraja callback received"
-        payment = _apply_payment_result(
-            payment,
-            result_code,
-            result_description,
-            callback.get("CallbackMetadata", {}),
-        )
-        logger.info("[payments] Callback processed for %s: %s | result_code=%s | result_desc=%s", checkout_request_id, payment.status, result_code, result_description)
-        return Response({"message": "Callback received"}, status=200)
+                payment.result_code = str(result_code)
+                payment.result_description = result_description
+                payment.status = "success"
+                payment.completed_at = timezone.now()
+                if receipt_number:
+                    payment.mpesa_receipt_number = str(receipt_number)
+                payment.order.payment_status = "success"
+                payment.order.order_status = "processing"
+                payment.order.save(update_fields=["payment_status", "order_status"])
+
+                for item in payment.order.items.select_related("animal"):
+                    if item.animal_id:
+                        item.animal.available = False
+                        item.animal.save(update_fields=["available"])
+
+                payment.save(update_fields=["status", "result_code", "result_description", "mpesa_receipt_number", "completed_at", "updated_at"])
+                logger.info("[payments] Callback processed for %s: SUCCESS | result_code=%s | result_desc=%s", checkout_request_id, result_code, result_description)
+            else:
+                payment = None
+                if checkout_request_id:
+                    payment = Payment.objects.select_for_update().select_related("order").filter(checkout_request_id=checkout_request_id).first()
+                if payment is None and merchant_request_id:
+                    payment = Payment.objects.select_for_update().select_related("order").filter(merchant_request_id=merchant_request_id).first()
+                if payment is not None:
+                    payment.result_code = str(result_code)
+                    payment.result_description = result_description
+                    payment.status = "failed"
+                    payment.completed_at = timezone.now()
+                    payment.order.payment_status = "failed"
+                    payment.order.save(update_fields=["payment_status"])
+                    payment.save(update_fields=["status", "result_code", "result_description", "completed_at", "updated_at"])
+                    logger.info("[payments] Callback processed for %s: FAILED | result_code=%s | result_desc=%s", checkout_request_id, result_code, result_description)
+                else:
+                    logger.warning("[payments] Callback failed for unknown checkout request: %s merchant=%s", checkout_request_id, merchant_request_id)
+
+            return JsonResponse(response_payload)
+        except Exception as e:
+            logger.exception("[payments] Daraja callback processing failed: %s payload=%s", str(e), raw_body)
+            return JsonResponse(response_payload)
