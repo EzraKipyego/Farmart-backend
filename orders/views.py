@@ -61,14 +61,7 @@ class CheckoutView(APIView):
                 )
             
             if not animal.available:
-                return Response({
-                    "message": f"{animal.title} is already purchased and is no longer available for checkout.",
-                    "code": "ANIMAL_ALREADY_PURCHASED",
-                    "details": {
-                        "animalId": str(animal.id),
-                        "status": "already_purchased",
-                    },
-                }, status=409)
+                return Response({"message": f"Animal {animal_id} is no longer available"}, status=409)
 
             price = Decimal(str(animal.price))
             if item.get("price") is not None:

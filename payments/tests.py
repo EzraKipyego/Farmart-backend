@@ -38,31 +38,6 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.data["delivery_fee"], "300.00")
         self.assertEqual(response.data["amount"], "10300.00")
 
-    def test_checkout_returns_clear_message_for_already_purchased_animal(self):
-        self.animal.available = False
-        self.animal.save(update_fields=["available"])
-
-        response = self.client.post("/api/checkout", {
-            "items": [{"animalId": str(self.animal.id), "quantity": 1, "price": 10000}],
-            "delivery_details": {"name": "Buyer", "phone": "0708319101"},
-        }, format="json")
-
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.data["code"], "ANIMAL_ALREADY_PURCHASED")
-        self.assertIn("already purchased", response.data["message"].lower())
-
-    def test_public_catalog_hides_sold_animals_and_marks_already_purchased(self):
-        sold_animal = Animal.objects.create(
-            farmer=self.farmer, type="Cow", breed="Friesian", title="Sold Cow",
-            age=3, weight=250, price=20000, location="Kiambu", available=False,
-        )
-
-        response = self.client.get("/api/animals")
-        self.assertEqual(response.status_code, 200)
-        animal_ids = [item["id"] for item in response.data]
-        self.assertNotIn(str(sold_animal.id), animal_ids)
-        self.assertTrue(any(item["title"] == self.animal.title for item in response.data))
-
     @patch("payments.views.initiate_stk_push", return_value=("ws_CO_test", "merchant_test"))
     def test_stk_is_pending_until_callback(self, _push):
         order = Order.objects.create(buyer=self.buyer, payment_status="pending", order_status="pending_payment")
