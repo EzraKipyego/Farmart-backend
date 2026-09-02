@@ -5,6 +5,19 @@ from accounts.models import User
 from animals.models import Animal
 
 
+class Cart(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="cart_items")
+    animal = models.ForeignKey(Animal, on_delete=models.CASCADE, related_name="cart_items")
+    quantity = models.PositiveIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "animal"], name="unique_cart_user_animal"),
+        ]
+
+
 class Order(models.Model):
     ORDER_STATUS_CHOICES = [
         ("pending_payment", "Pending Payment"),

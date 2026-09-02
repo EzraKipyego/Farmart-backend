@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Order, OrderItem
+from .models import Cart, Order, OrderItem
 from animals.models import Animal
 from farmart.permissions import IsBuyer, IsFarmer
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -10,6 +10,65 @@ from django.db import transaction
 logger = logging.getLogger(__name__)
 MONEY_QUANTUM = Decimal("0.01")
 DELIVERY_RATE = Decimal("0.03")
+
+
+class CartView(APIView):
+    permission_classes = [IsBuyer]
+
+    def get(self, request):
+        cart_items = Cart.objects.filter(user=request.user).select_related("animal")
+        return Response([self.to_dict(item) for item in cart_items])
+
+    def post(self, request):
+        return self.save_item(request)
+
+    def patch(self, request):
+        return self.save_item(request)
+
+    def delete(self, request):
+        animal_id = request.data.get("animalId") or request.data.get("animal_id")
+        if not animal_id:
+            return Response({"message": "Missing animal ID", "code": "ANIMAL_ID_REQUIRED", "details": {}}, status=400)
+        deleted, _ = Cart.objects.filter(user=request.user, animal_id=animal_id).delete()
+        if not deleted:
+            return Response({"message": "Cart item not found", "code": "CART_ITEM_NOT_FOUND", "details": {}}, status=404)
+        return Response({"animalId": str(animal_id), "deleted": True})
+
+    @staticmethod
+    def to_dict(cart_item):
+        animal = cart_item.animal
+        return {
+            "animalId": str(animal.id),
+            "title": animal.title,
+            "description": animal.description,
+            "image": animal.image,
+            "price": animal.price,
+            "quantity": cart_item.quantity,
+            "available": animal.available,
+        }
+
+    def save_item(self, request):
+        animal_id = request.data.get("animalId") or request.data.get("animal_id")
+        if not animal_id:
+            return Response({"message": "Missing animal ID", "code": "ANIMAL_ID_REQUIRED", "details": {}}, status=400)
+        try:
+            quantity = int(request.data.get("quantity", 1))
+        except (TypeError, ValueError):
+            return Response({"message": "Quantity must be a positive integer", "code": "INVALID_QUANTITY", "details": {}}, status=400)
+        if quantity < 1:
+            return Response({"message": "Quantity must be a positive integer", "code": "INVALID_QUANTITY", "details": {}}, status=400)
+        try:
+            animal = Animal.objects.get(id=animal_id)
+        except Animal.DoesNotExist:
+            return Response({"message": "Animal not found", "code": "ANIMAL_NOT_FOUND", "details": {}}, status=404)
+        if not animal.available:
+            return Response({"message": "This animal is no longer available", "code": "ANIMAL_ALREADY_PURCHASED", "details": {"animalId": str(animal.id)}}, status=409)
+        cart_item, created = Cart.objects.update_or_create(
+            user=request.user,
+            animal=animal,
+            defaults={"quantity": quantity},
+        )
+        return Response(self.to_dict(cart_item), status=201 if created else 200)
 
 
 class CheckoutView(APIView):

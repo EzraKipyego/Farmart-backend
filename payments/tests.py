@@ -7,7 +7,7 @@ from rest_framework.test import APITestCase
 
 from accounts.models import User
 from animals.models import Animal
-from orders.models import Order, OrderItem
+from orders.models import Cart, Order, OrderItem
 from payments.models import Payment
 
 
@@ -37,6 +37,40 @@ class PaymentFlowTests(APITestCase):
         self.assertEqual(response.data["subtotal"], "10000.00")
         self.assertEqual(response.data["delivery_fee"], "300.00")
         self.assertEqual(response.data["amount"], "10300.00")
+
+    def test_animal_search_q_filters_title_description_and_category(self):
+        Animal.objects.create(
+            farmer=self.farmer, type="Cow", breed="Friesian", title="Milk Cow",
+            age=3, weight=250, price=20000, location="Kiambu", description="Healthy dairy animal",
+        )
+
+        response = self.client.get("/api/animals?q=dairy")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["title"] for item in response.data], ["Milk Cow"])
+
+        response = self.client.get("/api/animals?q=goat")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["title"] for item in response.data], ["Goat"])
+
+    def test_cart_is_scoped_to_authenticated_user(self):
+        response = self.client.post("/api/cart", {
+            "animalId": str(self.animal.id), "quantity": 2,
+        }, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["quantity"], 2)
+
+        other_buyer = User.objects.create_user("other@example.com", "Other", "password", role="buyer")
+        self.client.force_authenticate(other_buyer)
+        response = self.client.get("/api/cart")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+
+        response = self.client.post("/api/cart", {
+            "animalId": str(self.animal.id), "quantity": 1,
+        }, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Cart.objects.filter(user=self.buyer).count(), 1)
+        self.assertEqual(Cart.objects.filter(user=other_buyer).count(), 1)
 
     @patch("payments.views.initiate_stk_push", return_value=("ws_CO_test", "merchant_test"))
     def test_stk_is_pending_until_callback(self, _push):
